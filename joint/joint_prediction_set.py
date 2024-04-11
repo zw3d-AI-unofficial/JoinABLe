@@ -46,7 +46,7 @@ class JointPredictionSet(JointSet):
         self.surface_samples = util.pad_pts(self.surface_samples)
         # Apply the body two transform so we are in the correct coords
         # We take the first joint transform, assuming they will be constant
-        transform2 = util.transform_to_np(self.joint_data["joints"][0]["geometry_or_origin_two"]["transform"])
+        transform2 = self.get_transform(body=2)
         body_two_mesh_temp = self.body_two_mesh.copy()
         body_two_mesh_temp.apply_transform(transform2)
         self.sdf = SDF(body_two_mesh_temp.vertices, body_two_mesh_temp.faces)
@@ -213,7 +213,7 @@ class JointPredictionSet(JointSet):
         joint_data["body_two_properties"] = g2_graph["properties"]
         return joint_data
 
-    def get_joint_predictions(self, body=1, limit=None):
+    def get_joint_predictions(self, body=1, limit=None, show_index=None):
         """
         Get the predictions for joint entities
         Returns an array of per-triangle predictions
@@ -235,7 +235,9 @@ class JointPredictionSet(JointSet):
         if limit is None:
             limit = len(self.prediction_data)
         # Store the max prediction values
-        for prediction in self.prediction_data["predictions"][:limit]:
+        for i, prediction in enumerate(self.prediction_data["predictions"][:limit]):
+            if show_index is not None and show_index != i:
+                continue
             value = prediction["value"]
             body_key = f"body_{suffix}"
             body_pred = prediction[body_key]
@@ -266,7 +268,7 @@ class JointPredictionSet(JointSet):
             lines = None
         return triangles, lines
 
-    def get_joint_prediction_axis_lines(self, body=1, limit=None, axis_length_scale_factor=0.35):
+    def get_joint_prediction_axis_lines(self, body=1, limit=None, axis_length_scale_factor=0.35, show_index=None):
         """Get lines representing the predicted axis lines"""
         assert self.bodies_loaded, "Joint set bodies not loaded"
         valid_bodies = {1, 2}
@@ -281,6 +283,8 @@ class JointPredictionSet(JointSet):
         start_points = np.zeros((num_preds, 3))
         end_points = np.zeros((num_preds, 3))
         for i, prediction in enumerate(self.prediction_data["predictions"][:num_preds]):
+            if show_index is not None and show_index != i:
+                continue
             origin, direction = self.get_joint_prediction_axis(body, i)
             # Get where the axis intersects the aabb
             # tmax will be the distance to the intersection in the positive direction
@@ -514,3 +518,9 @@ class JointPredictionSet(JointSet):
         aligned_mask = angles < angle_threshold
         is_aligned = aligned_mask.sum() > 0
         return is_aligned
+
+    def get_transform(self, body=1):
+        if body == 1:
+            return util.transform_to_np(self.joint_data["joints"][0]["geometry_or_origin_one"]["transform"])
+        else:
+            return util.transform_to_np(self.joint_data["joints"][0]["geometry_or_origin_two"]["transform"])

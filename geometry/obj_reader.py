@@ -58,8 +58,7 @@ class OBJReader:
                 elif splitted_line[0] == 'p':
                     solid.add_vertex_index(int(splitted_line[1]))
                 # Group
-                elif splitted_line[0] == 'g':
-                    assert len(splitted_line) >= 3
+                elif splitted_line[0] == 'g' and len(splitted_line) >= 3:
                     # g face 6
                     # g halfedge 0 edge 0
                     # g vertex 0
@@ -73,5 +72,10 @@ class OBJReader:
                         if not brep_face_active:
                             brep_face = BRepFace()
                             brep_face_active = True
-
+                # Surface
+                elif splitted_line[0] == 's':
+                    if brep_face is not None:
+                        solid.add_face(brep_face)
+                    brep_face_active = True
+                    brep_face = BRepFace()
         return solid

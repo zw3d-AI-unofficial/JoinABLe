@@ -527,17 +527,41 @@ class JointGraphDataset(JointBaseDataset):
         area_features2=None,
         length_features1=None,
         length_features2=None,
+        bbox1=None,
+        bbox2=None
     ):
         """Scale the points for both graphs"""
         # Get the combined bounding box
-        scale = JointGraphDataset.get_common_scale(node_features1, node_features2)
-        node_features1[:, :, :, :3] *= scale
-        # Check we aren't too far out of bounds due to the masked surface
-        if torch.max(node_features1[:, :, :, :3]) > 2.0 or torch.max(node_features1[:, :, :, :3]) < -2.0:
-            return False
-        node_features2[:, :, :, :3] *= scale
-        if torch.max(node_features2[:, :, :, :3]) > 2.0 or torch.max(node_features2[:, :, :, :3]) < -2.0:
-            return False
+        if len(node_features1) != 0 and len(node_features2) != 0:
+            scale = JointGraphDataset.get_common_scale(node_features1, node_features2)
+            node_features1[:, :, :, :3] *= scale
+            # Check we aren't too far out of bounds due to the masked surface
+            if torch.max(node_features1[:, :, :, :3]) > 2.0 or torch.max(node_features1[:, :, :, :3]) < -2.0:
+                return False
+            node_features2[:, :, :, :3] *= scale
+            if torch.max(node_features2[:, :, :, :3]) > 2.0 or torch.max(node_features2[:, :, :, :3]) < -2.0:
+                return False
+        else:
+            bbox_min = torch.tensor([
+                bbox1["min_point"]["x"], 
+                bbox1["min_point"]["y"], 
+                bbox1["min_point"]["z"],
+                bbox2["min_point"]["x"], 
+                bbox2["min_point"]["y"], 
+                bbox2["min_point"]["z"]
+            ])
+            bbox_max = torch.tensor([
+                bbox1["max_point"]["x"], 
+                bbox1["max_point"]["y"], 
+                bbox1["max_point"]["z"],
+                bbox2["max_point"]["x"], 
+                bbox2["max_point"]["y"], 
+                bbox2["max_point"]["z"]
+            ])
+            span = bbox_max - bbox_min
+            max_span = torch.max(span)
+            scale = 2.0 / max_span
+            
         if link_features1 is not None:
             link_features1[:, :, :3] *= scale
         if link_features2 is not None:
@@ -589,6 +613,8 @@ class JointGraphDataset(JointBaseDataset):
                 area_features2=g2.area,
                 length_features1=g1.length,
                 length_features2=g2.length,
+                bbox1=g1d["properties"]["bounding_box"],
+                bbox2=g2d["properties"]["bounding_box"],
             )
             # Throw out if we can't scale properly due to the masked surface area
             if not scale_good:
@@ -618,7 +644,7 @@ class JointGraphDataset(JointBaseDataset):
         node_count = len(g_json["nodes"])
         link_count = len(g_json["links"])
         # Throw out graphs without edges
-        if node_count < 2:
+        if node_count < 2 or (self.max_node_count > 0 and node_count > self.max_node_count):
             return None, None, face_count, edge_count, body_json_file
         if link_count <= 0:
             return None, None, face_count, edge_count, body_json_file
@@ -722,6 +748,9 @@ class JointGraphDataset(JointBaseDataset):
 
     def get_grid_features(self, node, center):
         """Return the grid features for a single node"""
+        if len(node["points"]) == 0:
+            return torch.tensor([])
+        
         # B-Rep Face
         if "surface_type" in node:
             # 1D array with XYZ point values in a 2D grid
