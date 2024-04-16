@@ -8,6 +8,7 @@ JoinABLe Joint Axis Prediction Network
 import os
 import sys
 import json
+import wandb
 import numpy as np
 from pathlib import Path
 
@@ -249,13 +250,23 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset, resume_c
     checkpoint_callback.CHECKPOINT_NAME_LAST = "last"
     callbacks = [checkpoint_callback]
 
-    trainer = get_trainer(
-        args,
-        loggers,
-        callbacks=callbacks,
-        resume_checkpoint=resume_checkpoint,
-        mode="train"
-    )
+    checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
+    if os.path.exists(checkpoint_file):
+        trainer = get_trainer(
+            args,
+            loggers,
+            callbacks=callbacks,
+            resume_checkpoint=checkpoint_file,
+            mode="train"
+        )
+    else:
+        trainer = get_trainer(
+            args,
+            loggers,
+            callbacks=callbacks,
+            resume_checkpoint=None,
+            mode="train"
+        )
     train_loader = train_dataset.get_train_dataloader(
         max_nodes_per_batch=args.max_nodes_per_batch,
         batch_size=args.batch_size,
@@ -273,18 +284,22 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset, resume_c
     return trainer.global_rank
 
 
-def evaluate_once(args, exp_name_dir, loggers, split):
+def evaluate_once(args, exp_name_dir, loggers, split, random_test=False):
     """Evaluate once after a multiple run training"""
     pl.utilities.seed.seed_everything(args.seed)
     # Load the model again as if sync_batchnorm is on it gets modified
-    checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
-    model = JointPrediction.load_from_checkpoint(
-        checkpoint_file,
-        map_location=torch.device("cpu")
-    )
-    print(f"Evaluating checkpoint {checkpoint_file} on {split} split")
+    model = JointPrediction(args)
+    if random_test:
+        print(f"Evaluating random on {split} split")
+    else:
+        checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
+        model = JointPrediction.load_from_checkpoint(
+            checkpoint_file,
+            map_location=torch.device("cpu")
+        )
+        print(f"Evaluating checkpoint {checkpoint_file} on {split} split")
     trainer = get_trainer(args, loggers, mode="evaluation")
-    test_dataset = load_dataset(args, split=split, label_scheme=args.test_label_scheme, max_node_count=0)
+    test_dataset = load_dataset(args, split=split, label_scheme=args.test_label_scheme, max_node_count=2048)
     test_loader = test_dataset.get_test_dataloader(batch_size=1, num_workers=args.num_workers)
     trainer.test(model, test_loader)
 
@@ -299,7 +314,11 @@ def main(args):
         exp_name_dir.mkdir(parents=True)
 
     # We save the logs to the experiment directory
-    loggers = util.get_loggers(exp_name_dir)
+    loggers = []
+    if args.traintest == "train" or args.traintest == "traintest":
+        loggers = util.get_loggers(exp_name_dir)
+        wandb.init(project='JoinABLe', entity=args.exp_name)
+        loggers.append(wandb.Logger())
 
     # TRAINING
     trainer_global_rank = None
@@ -336,6 +355,9 @@ def main(args):
 
         if trainer_global_rank is None or trainer_global_rank == 0:
             evaluate_once(args, exp_name_dir, loggers, args.test_split)
+
+    if args.traintest == "randomtest":
+        evaluate_once(args, exp_name_dir, loggers, args.test_split, random_test=True)
 
 
 if __name__ == "__main__":

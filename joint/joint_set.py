@@ -237,7 +237,9 @@ class JointSet():
                     entity_tris = tri_face_indices == entity_index
                     triangles = np.maximum(triangles, entity_tris.astype(int))
                 elif entity_type == "BRepEdge":
-                    lines.append(solid.get_polyline(entity_index))
+                    line = solid.get_polyline(entity_index)
+                    if line:
+                        lines.append(line)
             if len(lines) > 0:
                 lines = np.concatenate(lines)
             else:

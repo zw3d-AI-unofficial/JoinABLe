@@ -126,6 +126,8 @@ class BRepBody():
 
     def get_polyline(self, index):
         """Return a numpy array of a polyline indices"""
+        if index >= len(self.edges):
+            return None
         edge = self.edges[index]
         line_indices = edge.line.get_vertex_indices()
         repeat_indices = np.repeat(line_indices, 2)[1:-1]

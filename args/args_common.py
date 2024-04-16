@@ -15,7 +15,7 @@ def get_parser():
         "--traintest",
         type=str,
         default="traintest",
-        choices=("train", "test", "traintest"),
+        choices=("train", "test", "traintest", "randomtest"),
         help="Whether to train or test."
     )
     parser.add_argument(
