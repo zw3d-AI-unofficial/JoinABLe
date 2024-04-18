@@ -164,7 +164,7 @@ def intersect_ray_box(box_min, box_max, ray_origin, ray_dir_inv):
     return None, None
 
 
-def get_loggers(log_dir):
+def get_loggers(args, log_dir):
     """Get the loggers to use"""
     csv_logger = pl.loggers.CSVLogger(
         log_dir,
@@ -173,6 +173,9 @@ def get_loggers(log_dir):
     tb_logger = pl.loggers.TensorBoardLogger(
         log_dir,
         name="tb_log"
+    )
+    tb_logger = pl.loggers.WandbLogger(
+        project="joinable", entity="zwsoft_bj", name=args.exp_name
     )
     loggers = [csv_logger, tb_logger]
     return loggers

@@ -235,7 +235,7 @@ def get_trainer(args, loggers, callbacks=None, resume_checkpoint=None, mode="tra
     return trainer
 
 
-def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset, resume_checkpoint=None):
+def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
     """Train once for multiple run training"""
     pl.utilities.seed.seed_everything(args.seed)
     model = JointPrediction(args)
@@ -251,7 +251,7 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset, resume_c
     callbacks = [checkpoint_callback]
 
     checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
-    if os.path.exists(checkpoint_file):
+    if args.resume and os.path.exists(checkpoint_file):
         trainer = get_trainer(
             args,
             loggers,
@@ -316,9 +316,9 @@ def main(args):
     # We save the logs to the experiment directory
     loggers = []
     if args.traintest == "train" or args.traintest == "traintest":
-        loggers = util.get_loggers(exp_name_dir)
-        wandb.init(project='JoinABLe', entity=args.exp_name)
-        loggers.append(wandb.Logger())
+        loggers = util.get_loggers(args, exp_name_dir)
+        # wandb.init(project="joinable", entity="zwsoft_bj")
+        # loggers.append(wandb.Logger())
 
     # TRAINING
     trainer_global_rank = None

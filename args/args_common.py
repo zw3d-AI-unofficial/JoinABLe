@@ -62,6 +62,12 @@ def get_parser():
         help="Checkpoint to load for evaluation, e.g. last, best, etc..."
     )
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume checkpoint"
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=0,

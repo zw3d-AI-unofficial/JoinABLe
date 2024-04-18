@@ -6,3 +6,5 @@ log/
 tb_log/
 results/
 wandb/
+pretrained/paper/best.ckpt
+pretrained/paper/last.ckpt
