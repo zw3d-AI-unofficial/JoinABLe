@@ -382,29 +382,50 @@ class PreJointNetEdge(nn.Module):
 
 
 class GAT(torch.nn.Module):
-    def __init__(self, hidden_dim, dropout, mpn, batch_norm=False):
+    def __init__(self, hidden_dim, dropout, mpn, batch_norm=False, layer_num=2):
         super(GAT, self).__init__()
         if mpn == "gat":
             self.conv1 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
             self.conv2 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            self.conv3 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            self.conv4 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
         elif mpn == "gatv2":
             self.conv1 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
             self.conv2 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            self.conv3 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            self.conv4 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
         else:
             raise Exception("Unknown mpn argument")
         self.batch_norm = batch_norm
         if batch_norm:
             self.bn = nn.BatchNorm1d(hidden_dim)
         self.dropout = nn.Dropout(dropout)
+        self.layer_num = layer_num
 
     def forward(self, x, edges_idx):
         x = self.dropout(x)
         x = self.conv1(x, edges_idx)
+        if self.layer_num == 1:
+            return x
+        
         if self.batch_norm:
             x = self.bn(x)
         x = F.elu(x)
         x = self.dropout(x)
         x = self.conv2(x, edges_idx)
+        if self.layer_num == 2:
+            return x
+        
+        if self.batch_norm:
+            x = self.bn(x)
+        x = F.elu(x)
+        x = self.dropout(x)
+        x = self.conv3(x, edges_idx)
+        if self.layer_num == 3:
+            return x
+        
+        x = self.dropout(x)
+        x = self.conv4(x, edges_idx)
         return x
 
 
@@ -419,13 +440,14 @@ class JoinABLe(nn.Module):
         reduction="sum",
         post_net="mlp",
         pre_net="mlp",
+        mpn_layer_num=2,
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction
         self.pre_face = PreJointNetFace(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net)
         self.pre_edge = PreJointNetEdge(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net)
         # self.proj = nn.Linear(hidden_dim, hidden_dim)
-        self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm)
+        self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
         self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm)
 
     def forward(self, g1, g2, jg):

@@ -49,6 +49,12 @@ def get_parser():
         help="Message passing network to use."
     )
     parser.add_argument(
+        "--mpn_layer_num",
+        type=int,
+        default="2",
+        help="The number of the layers of the MPN."
+    )
+    parser.add_argument(
         "--post_net",
         type=str,
         choices=("mm", "mlp"),

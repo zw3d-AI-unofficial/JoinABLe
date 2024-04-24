@@ -41,7 +41,8 @@ class JointPrediction(pl.LightningModule):
             batch_norm=args.batch_norm,
             reduction=args.reduction,
             post_net=args.post_net,
-            pre_net=args.pre_net
+            pre_net=args.pre_net,
+            mpn_layer_num=args.mpn_layer_num
         )
         self.save_hyperparameters()
         self.args = args
