@@ -385,17 +385,22 @@ class GAT(torch.nn.Module):
     def __init__(self, hidden_dim, dropout, mpn, batch_norm=False, layer_num=2):
         super(GAT, self).__init__()
         if mpn == "gat":
-            self.conv1 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv2 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv3 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv4 = GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            for layer in range(layer_num):
+                setattr(
+                    self,
+                    "conv" + str(layer),
+                    GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+                )
         elif mpn == "gatv2":
-            self.conv1 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv2 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv3 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-            self.conv4 = GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+            for layer in range(layer_num):
+                setattr(
+                    self,
+                    "conv" + str(layer + 1),
+                    GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
+                )
         else:
             raise Exception("Unknown mpn argument")
+        
         self.batch_norm = batch_norm
         if batch_norm:
             self.bn = nn.BatchNorm1d(hidden_dim)
@@ -403,29 +408,14 @@ class GAT(torch.nn.Module):
         self.layer_num = layer_num
 
     def forward(self, x, edges_idx):
+        for layer in range(self.layer_num - 1):
+            x = self.dropout(x)
+            x = getattr(self, "conv" + str(layer + 1))(x, edges_idx)
+            if self.batch_norm:
+                x = self.bn(x)
+            x = F.elu(x)
         x = self.dropout(x)
-        x = self.conv1(x, edges_idx)
-        if self.layer_num == 1:
-            return x
-        
-        if self.batch_norm:
-            x = self.bn(x)
-        x = F.elu(x)
-        x = self.dropout(x)
-        x = self.conv2(x, edges_idx)
-        if self.layer_num == 2:
-            return x
-        
-        if self.batch_norm:
-            x = self.bn(x)
-        x = F.elu(x)
-        x = self.dropout(x)
-        x = self.conv3(x, edges_idx)
-        if self.layer_num == 3:
-            return x
-        
-        x = self.dropout(x)
-        x = self.conv4(x, edges_idx)
+        x = getattr(self, "conv" + str(self.layer_num))(x, edges_idx)
         return x
 
 
@@ -440,7 +430,7 @@ class JoinABLe(nn.Module):
         reduction="sum",
         post_net="mlp",
         pre_net="mlp",
-        mpn_layer_num=2,
+        mpn_layer_num=2
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction

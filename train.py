@@ -101,12 +101,17 @@ class JointPrediction(pl.LightningModule):
         has_holes = self.test_dataloader.dataloader.dataset.has_holes[batch_idx]
         top_1_holes = None
         top_1_no_holes = None
-        if has_holes:
-            self.log(f"eval_{split}_top_1_holes", top_1, on_step=False, on_epoch=True, logger=True)
-            top_1_holes = top_1
-        else:
-            self.log(f"eval_{split}_top_1_no_holes", top_1, on_step=False, on_epoch=True, logger=True)
-            top_1_no_holes = top_1
+        # if has_holes:
+        #     self.log(f"eval_{split}_top_1_holes", top_1, on_step=False, on_epoch=True, logger=True)
+        #     top_1_holes = top_1
+        # else:
+        #     self.log(f"eval_{split}_top_1_no_holes", top_1, on_step=False, on_epoch=True, logger=True)
+        #     top_1_no_holes = top_1
+
+        for key, value in JointGraphDataset.joint_type_map.items():
+            if value in jg.joint_type_vector:
+                self.log(f"eval_{split}_top_1_{key}", top_1, on_step=False, on_epoch=True, logger=True)
+
         return {
             "loss": loss,
             "top_k": top_k,
@@ -149,6 +154,11 @@ class JointPrediction(pl.LightningModule):
                     y=top_k.tolist(),
                     overwrite=True
                 )
+
+        with open(self.args.exp_name + '.txt', 'w') as file:
+            for i, one_top_k in enumerate(all_top_k):
+                if one_top_k[0]:   
+                    file.write(str(i) + '\n')
         return {
             "iou": test_iou,
             "accuracy": test_accuracy,
@@ -240,6 +250,7 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
     """Train once for multiple run training"""
     pl.utilities.seed.seed_everything(args.seed)
     model = JointPrediction(args)
+    # print(model)
     # Save in the main experiment directory
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
@@ -290,6 +301,7 @@ def evaluate_once(args, exp_name_dir, loggers, split, random_test=False):
     pl.utilities.seed.seed_everything(args.seed)
     # Load the model again as if sync_batchnorm is on it gets modified
     model = JointPrediction(args)
+    # print(model)
     if random_test:
         print(f"Evaluating random on {split} split")
     else:
@@ -318,8 +330,6 @@ def main(args):
     loggers = []
     if args.traintest == "train" or args.traintest == "traintest":
         loggers = util.get_loggers(args, exp_name_dir)
-        # wandb.init(project="joinable", entity="zwsoft_bj")
-        # loggers.append(wandb.Logger())
 
     # TRAINING
     trainer_global_rank = None
