@@ -485,6 +485,8 @@ class JoinABLe(nn.Module):
                 loss_clf += self.bce_loss(x_i, labels_i, pos_weight=args.pos_weight)
             elif args.loss == "mle":
                 loss_clf += self.mle_loss(x_i, labels_i)
+            elif args.loss == "focal":
+                loss_clf += self.focal_loss(x_i, labels_i)
             # Symmetric loss
             loss_sym += self.symmetric_loss(x_i, labels_i, num_nodes_graph1[i], num_nodes_graph2[i])
             start = end

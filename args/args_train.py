@@ -100,7 +100,7 @@ def get_parser():
     parser.add_argument(
         "--loss",
         type=str,
-        choices=("bce", "mle", "focal"),
+        choices=("bce", "mle", "focal", "symmetric"),
         default="mle",
         help="Loss to use."
     )

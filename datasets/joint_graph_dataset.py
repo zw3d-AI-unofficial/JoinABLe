@@ -139,7 +139,9 @@ class JointGraphDataset(JointBaseDataset):
         center_and_scale=True,
         max_node_count=0,
         label_scheme=None,
-        input_features="entity_types,length,face_reversed,edge_reversed"
+        input_features="entity_types,length,face_reversed,edge_reversed",
+        skip_far=False,
+        skip_interference=False
     ):
         """
         Load the Fusion 360 Gallery joints dataset from graph data
@@ -172,6 +174,8 @@ class JointGraphDataset(JointBaseDataset):
         self.center_and_scale = center_and_scale
         self.max_node_count = max_node_count
         self.labels_on, self.labels_off = self.parse_label_scheme_arg(label_scheme)
+        self.skip_far = skip_far
+        self.skip_interference = skip_interference
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -585,12 +589,40 @@ class JointGraphDataset(JointBaseDataset):
         if length_features2 is not None:
             length_features2 *= scale
         return True
+    
+    def is_overlapping(self, box1, box2):
+        """
+        Function to check if two 3D bounding boxes overlap.
+
+        Parameters:
+        box1 (tuple): Tuple representing the coordinates of box1 in the format (x1, y1, z1, x2, y2, z2),
+                    where (x1, y1, z1) represents the coordinates of one corner,
+                    and (x2, y2, z2) represents the coordinates of the opposite corner.
+        box2 (tuple): Tuple representing the coordinates of box2 in the same format as box1.
+
+        Returns:
+        bool: True if the boxes overlap, False otherwise.
+        """
+        x1_min, y1_min, z1_min, x1_max, y1_max, z1_max = box1
+        x2_min, y2_min, z2_min, x2_max, y2_max, z2_max = box2
+
+        # Check if there is no overlap in any dimension
+        if x1_max < x2_min or x2_max < x1_min or \
+        y1_max < y2_min or y2_max < y1_min or \
+        z1_max < z2_min or z2_max < z1_min:
+            return False
+        else:
+            return True
 
     def load_graph(self, joint_file_name):
         """Load a joint file and return a graph"""
         joint_file = self.root_dir / joint_file_name
         with open(joint_file, encoding="utf8") as f:
             joint_data = json.load(f)
+        # Skip pairs that have interference
+        if self.skip_interference:
+            if "interference" in joint_data and joint_data["interference"]:
+                return None
         g1, g1d, face_count1, edge_count1, g1_json_file = self.load_graph_body(
             joint_data["body_one"])
         if g1 is None:
@@ -603,6 +635,27 @@ class JointGraphDataset(JointBaseDataset):
         total_nodes = face_count1 + edge_count1 + face_count2 + edge_count2
         if self.max_node_count > 0:
             if total_nodes > self.max_node_count:
+                return None
+        # Skip parts pairs that are far away
+        if self.skip_far:
+            bbox1, bbox2 = g1d["properties"]["bounding_box"], g2d["properties"]["bounding_box"]
+            bbox1 = (
+                bbox1["min_point"]["x"],
+                bbox1["min_point"]["y"],
+                bbox1["min_point"]["z"],
+                bbox1["max_point"]["x"],
+                bbox1["max_point"]["y"],
+                bbox1["max_point"]["z"],
+            )
+            bbox2 = (
+                bbox2["min_point"]["x"],
+                bbox2["min_point"]["y"],
+                bbox2["min_point"]["z"],
+                bbox2["max_point"]["x"],
+                bbox2["max_point"]["y"],
+                bbox2["max_point"]["z"],
+            )
+            if not self.is_overlapping(bbox1, bbox2):
                 return None
         # Get the joint label matrix
         label_matrix, joint_type_vector = self.get_label_matrix(
@@ -653,7 +706,7 @@ class JointGraphDataset(JointBaseDataset):
         edge_count = g_json["properties"]["edge_count"]
         node_count = len(g_json["nodes"])
         link_count = len(g_json["links"])
-        # Throw out graphs without edges
+        # Throw out graphs without edges or with too many nodes
         if node_count < 2 or (self.max_node_count > 0 and node_count > self.max_node_count):
             return None, None, face_count, edge_count, body_json_file
         if link_count <= 0:

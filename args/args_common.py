@@ -122,6 +122,18 @@ def get_parser():
         default=42,
         help="Random seed to use"
     )
+    parser.add_argument(
+        "--skip_far",
+        action="store_true",
+        default=False,
+        help="Skip pairs that are far away."
+    )
+    parser.add_argument(
+        "--skip_interference",
+        action="store_true",
+        default=False,
+        help="Skip pairs that have interference."
+    )
     return parser
 
 

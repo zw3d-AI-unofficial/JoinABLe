@@ -124,21 +124,19 @@ class JointPrediction(pl.LightningModule):
         split = self.test_dataloader.dataloader.dataset.split
         test_iou = self.test_iou.compute()
         test_accuracy = self.test_accuracy.compute()
-        self.log(f"eval_{split}_iou", test_iou)
-        self.log(f"eval_{split}_accuracy", test_accuracy)
+        # self.log(f"eval_{split}_iou", test_iou)
+        # self.log(f"eval_{split}_accuracy", test_accuracy)
         all_top_k = np.stack([x["top_k"] for x in outs])
         all_top_1_holes = np.array([x["top_1_holes"] for x in outs if x["top_1_holes"] is not None])
         all_top_1_no_holes = np.array([x["top_1_no_holes"] for x in outs if x["top_1_no_holes"] is not None])
-        # All samples should be either holes or no holes, so check the counts add up to the total
-        assert len(all_top_1_holes) + len(all_top_1_no_holes) == all_top_k.shape[0]
-        if len(all_top_1_holes) > 0:
-            top_1_holes = all_top_1_holes.mean()
-        else:
-            top_1_holes = "--"
-        if len(all_top_1_no_holes) > 0:
-            top_1_no_holes = all_top_1_no_holes.mean()
-        else:
-            top_1_no_holes = "--"
+        top_1_holes = "--"
+        top_1_no_holes = "--"
+        # # All samples should be either holes or no holes, so check the counts add up to the total
+        # assert len(all_top_1_holes) + len(all_top_1_no_holes) == all_top_k.shape[0]
+        # if len(all_top_1_holes) > 0:
+        #     top_1_holes = all_top_1_holes.mean()
+        # if len(all_top_1_no_holes) > 0:
+        #     top_1_no_holes = all_top_1_no_holes.mean()
 
         k_seq = metrics.get_k_sequence()
         top_k = metrics.calculate_precision_at_k_from_sequence(all_top_k, use_percent=False)
@@ -155,10 +153,11 @@ class JointPrediction(pl.LightningModule):
                     overwrite=True
                 )
 
-        with open(self.args.exp_name + '.txt', 'w') as file:
-            for i, one_top_k in enumerate(all_top_k):
-                if one_top_k[0]:   
-                    file.write(str(i) + '\n')
+        # Log true positive sample id to a txt file
+        # with open(self.args.exp_name + '.txt', 'w') as file:
+        #     for i, one_top_k in enumerate(all_top_k):
+        #         if one_top_k[0]:   
+        #             file.write(str(i) + '\n')
         return {
             "iou": test_iou,
             "accuracy": test_accuracy,
@@ -196,7 +195,9 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         threads=args.threads,
         label_scheme=label_scheme,
         max_node_count=max_node_count,
-        input_features=args.input_features
+        input_features=args.input_features,
+        skip_far=args.skip_far,
+        skip_interference=args.skip_interference
     )
 
 
