@@ -134,6 +134,20 @@ def get_parser():
         default=False,
         help="Skip pairs that have interference."
     )
+    parser.add_argument(
+        "--skip_nurbs",
+        action="store_true",
+        default=False,
+        help="Skip true label with nurbs curve or surface as entity."
+    )
+    parser.add_argument(
+        "--joint_type",
+        type=str,
+        default="all",
+        help="Joint type to use as a string separated by commas.\
+                Can include: Other, Coincident, Tangent, Concentric,\
+                Parallel, Perpendicular"
+    )
     return parser
 
 

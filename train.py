@@ -197,7 +197,9 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         max_node_count=max_node_count,
         input_features=args.input_features,
         skip_far=args.skip_far,
-        skip_interference=args.skip_interference
+        skip_interference=args.skip_interference,
+        skip_nurbs=args.skip_nurbs,
+        joint_type=args.joint_type
     )
 
 

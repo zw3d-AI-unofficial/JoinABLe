@@ -141,7 +141,9 @@ class JointGraphDataset(JointBaseDataset):
         label_scheme=None,
         input_features="entity_types,length,face_reversed,edge_reversed",
         skip_far=False,
-        skip_interference=False
+        skip_interference=False,
+        skip_nurbs=False,
+        joint_type="all"
     ):
         """
         Load the Fusion 360 Gallery joints dataset from graph data
@@ -176,6 +178,8 @@ class JointGraphDataset(JointBaseDataset):
         self.labels_on, self.labels_off = self.parse_label_scheme_arg(label_scheme)
         self.skip_far = skip_far
         self.skip_interference = skip_interference
+        self.skip_nurbs = skip_nurbs
+        self.joint_type = joint_type
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -665,6 +669,8 @@ class JointGraphDataset(JointBaseDataset):
             face_count1, face_count2,
             edge_count1, edge_count2
         )
+        if label_matrix.sum() == 0:
+            return None
         # Create the joint graph from the label matrix
         joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_vector)
         # Scale geometry features from both graphs with a common scale
@@ -984,6 +990,27 @@ class JointGraphDataset(JointBaseDataset):
             entity2 = joint["geometry_or_origin_two"]["entity_one"]
             entity2_index = entity2["index"]
             entity2_type = entity2["type"]
+            joint_type = self.joint_type_map.get(joint["joint_type"], 0)
+            # Check joint type
+            if self.joint_type != "all":
+                joint_type_list = self.joint_type.split(',')
+                flag = False
+                for item in joint_type_list:
+                    if joint_type == self.joint_type_map[item]:
+                        flag = True
+                        break
+                if not flag:
+                    continue
+            # Check nurbs
+            if self.skip_nurbs:
+                if entity1_type == "BRepFace" and entity1["surface_type"] == "NurbsSurfaceType":
+                    continue
+                if entity2_type == "BRepFace" and entity2["surface_type"] == "NurbsSurfaceType":
+                    continue
+                if entity1_type == "BRepEdge" and entity1["curve_type"] == "NurbsCurve3DCurveType":
+                    continue
+                if entity2_type == "BRepEdge" and entity2["curve_type"] == "NurbsCurve3DCurveType":
+                    continue
             # Offset the joint indices for use in the label matrix
             entity1_index = self.offset_joint_index(
                 entity1_index, entity1_type, face_count1, entity_count1)
@@ -1005,8 +1032,7 @@ class JointGraphDataset(JointBaseDataset):
                         label_matrix[eq1_index][eq2_index] = self.label_map["JointEquivalent"]
             # Set the user selected joint indices
             label_matrix[entity1_index][entity2_index] = self.label_map["Joint"]
-            joint_type_vector[i] = self.joint_type_map.get(joint["joint_type"], 0)
-
+            joint_type_vector[i] = joint_type
         # Include ambiguous and hole labels
         # Adding separate labels to the label_matrix
         # We need to do this after all joints are marked out as labels
