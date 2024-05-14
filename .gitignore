@@ -1,10 +1,10 @@
 .ipynb_checkpoints/
 __pycache__/
 .vscode/
-data/
 log/
 tb_log/
 results/
 wandb/
 pretrained/paper/best.ckpt
 pretrained/paper/last.ckpt
+data

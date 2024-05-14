@@ -69,6 +69,21 @@ class JointPrediction(pl.LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
+    # def training_epoch_end(self, outputs):
+    #     if self.current_epoch % 1 == 0:
+    #         self.check_gradient_norm()
+
+    # def check_gradient_norm(self):
+    #     total_norm = torch.tensor(0.0)
+    #     for param in self.parameters():
+    #         if param.grad is not None:
+    #             param_norm = torch.norm(param.grad.data)
+    #             total_norm += param_norm.item() ** 2
+    #     total_norm = total_norm ** (1. / 2)
+    #     print("Gradient norm:", total_norm)
+    #     if torch.isnan(total_norm) or torch.isinf(total_norm):
+    #         print("Gradient has NaN or Inf values!")
+
     def validation_step(self, batch, batch_idx):
         g1, g2, jg = batch
         jg.edge_attr = jg.edge_attr.long()
@@ -109,7 +124,7 @@ class JointPrediction(pl.LightningModule):
         #     top_1_no_holes = top_1
 
         for key, value in JointGraphDataset.joint_type_map.items():
-            if value in jg.joint_type_vector:
+            if value in jg.joint_type_set[0]:
                 self.log(f"eval_{split}_top_1_{key}", top_1, on_step=False, on_epoch=True, logger=True)
 
         return {

@@ -662,7 +662,7 @@ class JointGraphDataset(JointBaseDataset):
             if not self.is_overlapping(bbox1, bbox2):
                 return None
         # Get the joint label matrix
-        label_matrix, joint_type_vector = self.get_label_matrix(
+        label_matrix, joint_type_set = self.get_label_matrix(
             joint_data,
             g1, g2,
             g1d, g2d,
@@ -672,7 +672,7 @@ class JointGraphDataset(JointBaseDataset):
         if label_matrix.sum() == 0:
             return None
         # Create the joint graph from the label matrix
-        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_vector)
+        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_set)
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
             scale_good = self.scale_geometry(
@@ -982,7 +982,7 @@ class JointGraphDataset(JointBaseDataset):
         # 5 - Hole
         # 6 - Hole equivalents
         label_matrix = torch.zeros((entity_count1, entity_count2), dtype=torch.long)
-        joint_type_vector = torch.zeros((len(joints)), dtype=torch.long)
+        joint_type_set = set()
         for i, joint in enumerate(joints):
             entity1 = joint["geometry_or_origin_one"]["entity_one"]
             entity1_index = entity1["index"]
@@ -1032,7 +1032,7 @@ class JointGraphDataset(JointBaseDataset):
                         label_matrix[eq1_index][eq2_index] = self.label_map["JointEquivalent"]
             # Set the user selected joint indices
             label_matrix[entity1_index][entity2_index] = self.label_map["Joint"]
-            joint_type_vector[i] = joint_type
+            joint_type_set.add(joint_type)
         # Include ambiguous and hole labels
         # Adding separate labels to the label_matrix
         # We need to do this after all joints are marked out as labels
@@ -1057,9 +1057,9 @@ class JointGraphDataset(JointBaseDataset):
                 g1_axis_lines, g2_axis_lines,
                 label_matrix, self.label_map["HoleEquivalent"]
             )
-        return label_matrix, joint_type_vector
+        return label_matrix, joint_type_set
 
-    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_vector):
+    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_set):
         """Create a joint graph connecting graph1 and graph2 densely"""
         nodes_indices_first_graph = torch.arange(graph1.num_nodes)
         # We want to treat both graphs as one, so order the indices of the second graph's nodes
@@ -1076,7 +1076,7 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph.edge_attr = label_matrix.view(-1)
         joint_graph.num_nodes_graph1 = graph1.num_nodes
         joint_graph.num_nodes_graph2 = graph2.num_nodes
-        joint_graph.joint_type_vector = joint_type_vector
+        joint_graph.joint_type_set = joint_type_set
         return joint_graph
 
     def get_joint_equivalents(self, geometry, face_count, entity_count):
