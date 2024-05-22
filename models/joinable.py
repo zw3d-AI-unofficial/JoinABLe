@@ -22,7 +22,7 @@ def mlp(inp_dim, hidden_dim, out_dim, num_layers=1, batch_norm=False):
         if batch_norm:
             modules.append(nn.BatchNorm1d(hidden_dim))
         modules.append(nn.ELU())
-    modules.append(nn.Linear(hidden_dim, out_dim, bias=True))
+    modules.append(nn.Linear(inp_dim if num_layers == 1 else hidden_dim, out_dim, bias=False))
     return nn.Sequential(*modules)
 
 
@@ -77,22 +77,23 @@ class EdgeMLPMPN(nn.Module):
     def __init__(self, in_channels, hidden_channels, batch_norm=False):
         super().__init__()
         layers = []
-        layers.append(nn.Conv2d(2 * in_channels, hidden_channels, kernel_size=1, bias=not batch_norm))
+        layers.append(nn.Conv2d(in_channels, hidden_channels, kernel_size=1, bias=not batch_norm))
         if batch_norm:
-            layers.append(nn.BatchNorm2d(hidden_channels))
+            layers.append(nn.LayerNorm([hidden_channels, 1, 1], elementwise_affine=True))
         layers.append(nn.ELU())
         layers.append(nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, bias=not batch_norm))
         if batch_norm:
-            layers.append(nn.BatchNorm2d(hidden_channels))
+            layers.append(nn.LayerNorm([hidden_channels, 1, 1], elementwise_affine=True))
         layers.append(nn.ELU())
-        layers.append(nn.Conv2d(hidden_channels, 1, kernel_size=1))
+        layers.append(nn.Conv2d(hidden_channels, 1, kernel_size=1, bias=False))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x, edge_index):
         src, tgt = edge_index[0], edge_index[1]
         x_src = x[src, :]
         x_dst = x[tgt, :]
-        x = torch.cat([x_src, x_dst], dim=1)
+        # x = torch.cat([x_src, x_dst], dim=1)
+        x = x_src + x_dst
         x = x.view(x.size(0), x.size(1), 1, 1)
         x = self.net(x)
         return x.squeeze()
@@ -138,7 +139,7 @@ class PostJointNet(nn.Module):
             self.mpn = EdgeDotProductMPN()
         elif self.method == "mlp":
             self.mpn = EdgeMLPMPN(hidden_dim, hidden_dim, batch_norm=batch_norm)
-
+        self.layer_norm = nn.LayerNorm(normalized_shape=self.hidden_dim, elementwise_affine=True)
         # for m in self.modules():
         #     if isinstance(m, (nn.Linear, nn.Conv2d)):
         #         torch.nn.init.xavier_uniform_(m.weight)
@@ -151,6 +152,7 @@ class PostJointNet(nn.Module):
         x1 = self.dropout(x1)
         x2 = self.dropout(x2)
         x = prepare_features_for_joint_graph(x1, x2, jg)
+        x = self.layer_norm(x)
         logits = self.mpn(x, jg.edge_index)
         return logits
 
@@ -207,7 +209,7 @@ class PreJointNetFace(nn.Module):
             if self.grid_feat_size == 0:
                 ent_dim = hidden_dim
             self.ent_dim = ent_dim
-            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
+            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=1, batch_norm=batch_norm)
 
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
@@ -304,7 +306,7 @@ class PreJointNetEdge(nn.Module):
                 grid_dim = hidden_dim
             self.grid_dim = grid_dim
             if self.method == "mlp":
-                self.model_pre_grid = mlp(self.grid_feat_size, grid_dim, grid_dim, num_layers=2, batch_norm=batch_norm)
+                self.model_pre_grid = mlp(self.grid_feat_size, grid_dim, grid_dim, num_layers=1, batch_norm=batch_norm)
             else:
                 channels = self.grid_feat_size // JointGraphDataset.grid_size
                 self.model_pre_grid = cnn1d(channels, grid_dim, grid_dim, num_layers=3, batch_norm=batch_norm)
@@ -314,7 +316,7 @@ class PreJointNetEdge(nn.Module):
             if self.grid_feat_size == 0:
                 ent_dim = hidden_dim
             self.ent_dim = ent_dim
-            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
+            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=1, batch_norm=batch_norm)
 
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
@@ -406,6 +408,7 @@ class GAT(torch.nn.Module):
             self.bn = nn.BatchNorm1d(hidden_dim)
         self.dropout = nn.Dropout(dropout)
         self.layer_num = layer_num
+        self.identity = nn.Identity()
 
     def forward(self, x, edges_idx):
         for layer in range(self.layer_num - 1):
@@ -415,7 +418,10 @@ class GAT(torch.nn.Module):
                 x = self.bn(x)
             x = F.elu(x)
         x = self.dropout(x)
-        x = getattr(self, "conv" + str(self.layer_num))(x, edges_idx)
+        if hasattr(self, "conv" + str(self.layer_num)):
+            x = getattr(self, "conv" + str(self.layer_num))(x, edges_idx)
+        else:
+            x = self.identity(x)
         return x
 
 
@@ -438,7 +444,7 @@ class JoinABLe(nn.Module):
         self.pre_edge = PreJointNetEdge(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net)
         # self.proj = nn.Linear(hidden_dim, hidden_dim)
         self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
-        self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm)
+        self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=True)
 
     def forward(self, g1, g2, jg):
         # Compute the features for the is_face nodes, and set the rest to zero
