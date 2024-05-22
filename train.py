@@ -69,20 +69,25 @@ class JointPrediction(pl.LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
-    # def training_epoch_end(self, outputs):
-    #     if self.current_epoch % 1 == 0:
-    #         self.check_gradient_norm()
+    def training_epoch_end(self, outputs):
+        if self.current_epoch % 1 == 0:
+            self.check_gradient_norm()
 
-    # def check_gradient_norm(self):
-    #     total_norm = torch.tensor(0.0)
-    #     for param in self.parameters():
-    #         if param.grad is not None:
-    #             param_norm = torch.norm(param.grad.data)
-    #             total_norm += param_norm.item() ** 2
-    #     total_norm = total_norm ** (1. / 2)
-    #     print("Gradient norm:", total_norm)
-    #     if torch.isnan(total_norm) or torch.isinf(total_norm):
-    #         print("Gradient has NaN or Inf values!")
+    def check_gradient_norm(self):
+        grads = [p.grad for p in self.parameters() if p.grad is not None]
+        flat_grads = torch.cat([g.view(-1) for g in grads])
+        total_norm = torch.linalg.norm(flat_grads, ord=2)
+
+        # total_norm = torch.tensor(0.0)
+        # for param in self.parameters():
+        #     if param.grad is not None:
+        #         param_norm = torch.norm(param.grad.data)
+        #         total_norm += param_norm.item() ** 2
+        # total_norm = total_norm ** (1. / 2)
+
+        print("\nGradient norm:", total_norm)
+        if torch.isnan(total_norm) or torch.isinf(total_norm):
+            print("Gradient has NaN or Inf values!")
 
     def validation_step(self, batch, batch_idx):
         g1, g2, jg = batch
@@ -157,7 +162,7 @@ class JointPrediction(pl.LightningModule):
         top_k = metrics.calculate_precision_at_k_from_sequence(all_top_k, use_percent=False)
         top_k_results = ""
         for k, result in zip(k_seq, top_k):
-            top_k_results += f"{k} {result:.4f}%\n"
+            top_k_results += f"{k} {result:.4f}\n"
         self.print(f"Eval top-k results on {split} set:\n{top_k_results[:-2]}")
         for logger in self.logger:
             if isinstance(logger, pl.loggers.CometLogger):
@@ -188,14 +193,14 @@ class JointPrediction(pl.LightningModule):
         return self.model(g1, g2, jg)
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.model.parameters(), lr=self.args.lr)
+        optimizer = optim.AdamW(self.model.parameters(), lr=self.args.lr)
         scheduler = ReduceLROnPlateau(optimizer, "min")
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": "val_loss",
-            },
+            # "lr_scheduler": {
+            #     "scheduler": scheduler,
+            #     "monitor": "val_loss",
+            # },
         }
 
 
@@ -341,8 +346,6 @@ def main(args):
     exp_name_dir = exp_dir / args.exp_name
     if not exp_name_dir.exists():
         exp_name_dir.mkdir(parents=True)
-    if not exp_name_dir.exists():
-        exp_name_dir.mkdir(parents=True)
 
     # We save the logs to the experiment directory
     loggers = []
@@ -391,4 +394,6 @@ def main(args):
 
 if __name__ == "__main__":
     args = args_train.get_args()
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     main(args)
