@@ -672,7 +672,7 @@ class JointGraphDataset(JointBaseDataset):
         if label_matrix.sum() == 0:
             return None
         # Create the joint graph from the label matrix
-        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_set)
+        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_set, joint_file_name)
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
             scale_good = self.scale_geometry(
@@ -1059,7 +1059,7 @@ class JointGraphDataset(JointBaseDataset):
             )
         return label_matrix, joint_type_set
 
-    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_set):
+    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_set, joint_file_name):
         """Create a joint graph connecting graph1 and graph2 densely"""
         nodes_indices_first_graph = torch.arange(graph1.num_nodes)
         # We want to treat both graphs as one, so order the indices of the second graph's nodes
@@ -1077,6 +1077,7 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph.num_nodes_graph1 = graph1.num_nodes
         joint_graph.num_nodes_graph2 = graph2.num_nodes
         joint_graph.joint_type_set = joint_type_set
+        joint_graph.joint_file_name = joint_file_name
         return joint_graph
 
     def get_joint_equivalents(self, geometry, face_count, entity_count):

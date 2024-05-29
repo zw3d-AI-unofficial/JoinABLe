@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import wandb
+import random
 import numpy as np
 from pathlib import Path
 
@@ -266,7 +267,7 @@ def get_trainer(args, loggers, callbacks=None, resume_checkpoint=None, mode="tra
 
 def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
     """Train once for multiple run training"""
-    pl.utilities.seed.seed_everything(args.seed)
+    # pl.utilities.seed.seed_everything(args.seed)
     model = JointPrediction(args)
     # print(model)
     # Save in the main experiment directory
@@ -316,7 +317,7 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
 
 def evaluate_once(args, exp_name_dir, loggers, split, random_test=False):
     """Evaluate once after a multiple run training"""
-    pl.utilities.seed.seed_everything(args.seed)
+    # pl.utilities.seed.seed_everything(args.seed)
     # Load the model again as if sync_batchnorm is on it gets modified
     model = JointPrediction(args)
     # print(model)
@@ -335,6 +336,16 @@ def evaluate_once(args, exp_name_dir, loggers, split, random_test=False):
     trainer.test(model, test_loader)
 
 
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def main(args):
     """Main entry point for our training script"""
     exp_dir = Path(args.exp_dir)
@@ -343,6 +354,8 @@ def main(args):
         exp_name_dir.mkdir(parents=True)
     if not exp_name_dir.exists():
         exp_name_dir.mkdir(parents=True)
+    
+    seed_everything(args.seed)
 
     # We save the logs to the experiment directory
     loggers = []
