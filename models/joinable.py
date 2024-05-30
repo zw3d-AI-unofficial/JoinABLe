@@ -467,7 +467,7 @@ class JoinABLe(nn.Module):
     def compute_loss(self, args, x, joint_graph):
         joint_graph_unbatched = joint_graph.to_data_list()
         batch_size = len(joint_graph_unbatched)
-        size_of_each_joint_graph = [np.product(list(item.edge_attr.shape)) for item in joint_graph_unbatched]
+        size_of_each_joint_graph = [np.prod(list(item.edge_attr.shape)) for item in joint_graph_unbatched]
         num_nodes_graph1 = [item.num_nodes_graph1 for item in joint_graph_unbatched]
         num_nodes_graph2 = [item.num_nodes_graph2 for item in joint_graph_unbatched]
 

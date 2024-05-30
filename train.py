@@ -22,7 +22,6 @@ import torchmetrics
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.plugins import DDPPlugin
 
 from utils import metrics
 from utils import util
@@ -47,19 +46,20 @@ class JointPrediction(pl.LightningModule):
         )
         self.save_hyperparameters()
         self.args = args
-        self.test_iou = torchmetrics.IoU(
-            threshold=args.threshold,
-            num_classes=2,
-            compute_on_step=False,
-            ignore_index=0,
-        )
-        self.test_accuracy = torchmetrics.Accuracy(
-            threshold=args.threshold,
-            num_classes=2,
-            compute_on_step=False,
-            # ignore_index=0,
-            multiclass=True
-        )
+        # self.test_iou = torchmetrics.IoU(
+        #     threshold=args.threshold,
+        #     num_classes=2,
+        #     compute_on_step=False,
+        #     ignore_index=0,
+        # )
+        # self.test_accuracy = torchmetrics.Accuracy(
+        #     threshold=args.threshold,
+        #     num_classes=2,
+        #     compute_on_step=False,
+        #     # ignore_index=0,
+        #     multiclass=True
+        # )
+        self.test_step_outputs = []
 
     def training_step(self, batch, batch_idx):
         g1, g2, jg = batch
@@ -70,20 +70,23 @@ class JointPrediction(pl.LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         return loss
 
+    def training_step_end(self):
+        self.check_gradient_norm()
+
     # def training_epoch_end(self, outputs):
     #     if self.current_epoch % 1 == 0:
     #         self.check_gradient_norm()
 
-    # def check_gradient_norm(self):
-    #     total_norm = torch.tensor(0.0)
-    #     for param in self.parameters():
-    #         if param.grad is not None:
-    #             param_norm = torch.norm(param.grad.data)
-    #             total_norm += param_norm.item() ** 2
-    #     total_norm = total_norm ** (1. / 2)
-    #     print("Gradient norm:", total_norm)
-    #     if torch.isnan(total_norm) or torch.isinf(total_norm):
-    #         print("Gradient has NaN or Inf values!")
+    def check_gradient_norm(self):
+        total_norm = torch.tensor(0.0)
+        for param in self.model.parameters():
+            if param.grad is not None:
+                param_norm = torch.norm(param.grad.data)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** (1. / 2)
+        print("Gradient norm:", total_norm)
+        if torch.isnan(total_norm) or torch.isinf(total_norm):
+            print("Gradient has NaN or Inf values!")
 
     def validation_step(self, batch, batch_idx):
         g1, g2, jg = batch
@@ -97,7 +100,7 @@ class JointPrediction(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         # Get the split we are using from the dataset
-        split = self.test_dataloader.dataloader.dataset.split
+        split = self._trainer.test_dataloaders.dataset.split
         # Inference
         g1, g2, jg = batch
         jg.edge_attr = jg.edge_attr.long()
@@ -105,8 +108,8 @@ class JointPrediction(pl.LightningModule):
         loss = self.model.compute_loss(self.args, x, jg)
         # Get the probabilities and calculate metrics
         prob = F.softmax(x, dim=0)
-        self.test_iou.update(prob, jg.edge_attr)
-        self.test_accuracy.update(prob, jg.edge_attr)
+        # self.test_iou.update(prob, jg.edge_attr)
+        # self.test_accuracy.update(prob, jg.edge_attr)
         # Calculate the precision at k with a default sequence of k
         top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes)
         top_1 = top_k[0]
@@ -114,7 +117,7 @@ class JointPrediction(pl.LightningModule):
         self.log(f"eval_{split}_top_1", top_1, on_step=False, on_epoch=True, logger=True)
         # Log evaluation based on if there are holes or not
         # Batch size 1 and no shuffle lets us use the batch index
-        has_holes = self.test_dataloader.dataloader.dataset.has_holes[batch_idx]
+        has_holes = self._trainer.test_dataloaders.dataset.has_holes[batch_idx]
         top_1_holes = None
         top_1_no_holes = None
         # if has_holes:
@@ -128,6 +131,12 @@ class JointPrediction(pl.LightningModule):
             if value in jg.joint_type_set[0]:
                 self.log(f"eval_{split}_top_1_{key}", top_1, on_step=False, on_epoch=True, logger=True)
 
+        self.test_step_outputs.append({
+            "loss": loss,
+            "top_k": top_k,
+            "top_1_holes": top_1_holes,
+            "top_1_no_holes": top_1_no_holes
+        })
         return {
             "loss": loss,
             "top_k": top_k,
@@ -135,16 +144,16 @@ class JointPrediction(pl.LightningModule):
             "top_1_no_holes": top_1_no_holes
         }
 
-    def test_epoch_end(self, outs):
+    def on_test_epoch_end(self):
         # Get the split we are using from the dataset
-        split = self.test_dataloader.dataloader.dataset.split
-        test_iou = self.test_iou.compute()
-        test_accuracy = self.test_accuracy.compute()
+        split = self._trainer.test_dataloaders.dataset.split
+        # test_iou = self.test_iou.compute()
+        # test_accuracy = self.test_accuracy.compute()
         # self.log(f"eval_{split}_iou", test_iou)
         # self.log(f"eval_{split}_accuracy", test_accuracy)
-        all_top_k = np.stack([x["top_k"] for x in outs])
-        all_top_1_holes = np.array([x["top_1_holes"] for x in outs if x["top_1_holes"] is not None])
-        all_top_1_no_holes = np.array([x["top_1_no_holes"] for x in outs if x["top_1_no_holes"] is not None])
+        all_top_k = np.stack([x["top_k"] for x in self.test_step_outputs])
+        all_top_1_holes = np.array([x["top_1_holes"] for x in self.test_step_outputs if x["top_1_holes"] is not None])
+        all_top_1_no_holes = np.array([x["top_1_no_holes"] for x in self.test_step_outputs if x["top_1_no_holes"] is not None])
         top_1_holes = "--"
         top_1_no_holes = "--"
         # # All samples should be either holes or no holes, so check the counts add up to the total
@@ -160,7 +169,7 @@ class JointPrediction(pl.LightningModule):
         for k, result in zip(k_seq, top_k):
             top_k_results += f"{k} {result:.4f}%\n"
         self.print(f"Eval top-k results on {split} set:\n{top_k_results[:-2]}")
-        for logger in self.logger:
+        for logger in self._trainer.loggers:
             if isinstance(logger, pl.loggers.CometLogger):
                 logger.experiment.log_curve(
                     f"eval_{split}_top_k",
@@ -175,8 +184,8 @@ class JointPrediction(pl.LightningModule):
         #         if one_top_k[0]:   
         #             file.write(str(i) + '\n')
         return {
-            "iou": test_iou,
-            "accuracy": test_accuracy,
+            # "iou": test_iou,
+            # "accuracy": test_accuracy,
             "top_1": top_k[0],
             "top_1_holes": top_1_holes,
             "top_1_no_holes": top_1_no_holes
@@ -219,57 +228,59 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
     )
 
 
-def get_trainer(args, loggers, callbacks=None, resume_checkpoint=None, mode="train"):
+def get_trainer(args, loggers, callbacks=None, mode="train"):
     """Get the PyTorch Lightning Trainer"""
     log_every_n_steps = 100
-    flush_logs_every_n_steps = 150
     if mode == "train":
-        # Distributed training
-        if torch.cuda.device_count() > 1 and args.accelerator != "None":
-            if args.accelerator == "ddp":
-                plugins = DDPPlugin(find_unused_parameters=False)
-            else:
-                plugins = None
-            trainer = Trainer(
-                callbacks=callbacks,
-                gpus=args.gpus,
-                accelerator=args.accelerator,
-                logger=loggers,
-                max_epochs=args.epochs,
-                sync_batchnorm=args.batch_norm,
-                plugins=plugins,
-                log_every_n_steps=log_every_n_steps,
-                flush_logs_every_n_steps=flush_logs_every_n_steps,
-                resume_from_checkpoint=resume_checkpoint
-            )
-        # Single GPU training
-        else:
-            trainer = Trainer(
-                callbacks=callbacks,
-                gpus=args.gpus,
-                logger=loggers,
-                max_epochs=args.epochs,
-                log_every_n_steps=log_every_n_steps,
-                flush_logs_every_n_steps=flush_logs_every_n_steps,
-                resume_from_checkpoint=resume_checkpoint
-            )
-        if resume_checkpoint is not None and trainer.global_rank == 0:
-            print("Resuming existing checkpoint from:", resume_checkpoint)
+        # # Distributed training
+        # if torch.cuda.device_count() > 1 and args.accelerator != "None":
+        #     trainer = Trainer(
+        #         max_epochs=args.epochs,
+        #         devices=args.gpus,
+        #         strategy=args.accelerator,
+        #         log_every_n_steps=log_every_n_steps,
+        #         callbacks=callbacks,
+        #         logger=loggers,
+        #         sync_batchnorm=args.batch_norm
+        #     )
+        # # Single GPU training
+        # else:
+        #     trainer = Trainer(
+        #         max_epochs=args.epochs,
+        #         devices=args.gpus,
+        #         log_every_n_steps=log_every_n_steps,
+        #         callbacks=callbacks,
+        #         logger=loggers,
+        #         sync_batchnorm=args.batch_norm
+        #     )
+        trainer = Trainer(
+            max_epochs=args.epochs,
+            devices=[0],
+            log_every_n_steps=log_every_n_steps,
+            callbacks=callbacks,
+            logger=loggers,
+            sync_batchnorm=args.batch_norm
+        )
     elif mode == "evaluation":
         trainer = Trainer(
-            gpus=None,
+            accelerator="cpu",
             logger=loggers,
-            log_every_n_steps=log_every_n_steps,
-            flush_logs_every_n_steps=flush_logs_every_n_steps,
+            log_every_n_steps=log_every_n_steps
         )
     return trainer
 
 
 def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
     """Train once for multiple run training"""
-    # pl.utilities.seed.seed_everything(args.seed)
-    model = JointPrediction(args)
-    # print(model)
+    checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
+    if args.resume and os.path.exists(checkpoint_file):
+        model = JointPrediction.load_from_checkpoint(
+            checkpoint_file
+        )
+        print("Resuming existing checkpoint from:", checkpoint_file)
+    else:
+        model = JointPrediction(args)
+        
     # Save in the main experiment directory
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
@@ -281,23 +292,13 @@ def train_once(args, exp_name_dir, loggers, train_dataset, val_dataset):
     checkpoint_callback.CHECKPOINT_NAME_LAST = "last"
     callbacks = [checkpoint_callback]
 
-    checkpoint_file = exp_name_dir / f"{args.checkpoint}.ckpt"
-    if args.resume and os.path.exists(checkpoint_file):
-        trainer = get_trainer(
-            args,
-            loggers,
-            callbacks=callbacks,
-            resume_checkpoint=checkpoint_file,
-            mode="train"
-        )
-    else:
-        trainer = get_trainer(
-            args,
-            loggers,
-            callbacks=callbacks,
-            resume_checkpoint=None,
-            mode="train"
-        )
+    trainer = get_trainer(
+        args,
+        loggers,
+        callbacks=callbacks,
+        mode="train"
+    )
+
     train_loader = train_dataset.get_train_dataloader(
         max_nodes_per_batch=args.max_nodes_per_batch,
         batch_size=args.batch_size,
@@ -346,16 +347,24 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def main(args):
     """Main entry point for our training script"""
+
+    os.environ['HTTP_PROXY'] = 'http://127.0.0.1:2080'
+    os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:2080'
+    os.environ['ALL_PROXY'] = 'socks5://127.0.0.1:2080'
+    os.environ['CUDA_LAUNCH_BLOCKING']='1'
+    torch.set_float32_matmul_precision('high')
+    torch.autograd.set_detect_anomaly(True)
+    seed_everything(args.seed)
+    
     exp_dir = Path(args.exp_dir)
     exp_name_dir = exp_dir / args.exp_name
     if not exp_name_dir.exists():
         exp_name_dir.mkdir(parents=True)
     if not exp_name_dir.exists():
         exp_name_dir.mkdir(parents=True)
-    
-    seed_everything(args.seed)
 
     # We save the logs to the experiment directory
     loggers = []

@@ -89,7 +89,7 @@ def get_parser():
         "--accelerator",
         type=str,
         default="ddp",
-        choices=("ddp", "horovod", "ddp_spawn", "None"),
+        choices=("dp", "ddp", "ddp_spawn", "ddp_sharded", "ddp_sharded_spawn", "None"),
         help="Accelerator to use for multi-gpu training."
     )
     parser.add_argument(

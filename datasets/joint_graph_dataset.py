@@ -275,9 +275,14 @@ class JointGraphDataset(JointBaseDataset):
         return [graph1, graph2, joint_graph]
 
     def collate_fn_fixed_batch_size(self, batch):
-        bg1 = Batch.from_data_list([x[0] for x in batch])
-        bg2 = Batch.from_data_list([x[1] for x in batch])
-        jg = Batch.from_data_list([x[2] for x in batch])
+        def set_num_nodes(data):
+            if 'num_nodes' not in data:
+                data.num_nodes = data.edge_index.max().item() + 1 if data.edge_index.size(1) > 0 else 0
+            return data
+
+        bg1 = Batch.from_data_list([set_num_nodes(x[0]) for x in batch])
+        bg2 = Batch.from_data_list([set_num_nodes(x[1]) for x in batch])
+        jg = Batch.from_data_list([set_num_nodes(x[2]) for x in batch])
         return bg1, bg2, jg
 
     def get_train_dataloader(self, max_nodes_per_batch=0, batch_size=1, shuffle=True, num_workers=0):
@@ -364,7 +369,7 @@ class JointGraphDataset(JointBaseDataset):
         # 'Remove' here is setting the features to None
         # as we can't delete the class properties
         edge_index = g.edge_index
-        for g_key in g.keys:
+        for g_key in g.keys():
             if g_key == "edge_index" or g_key == "is_face":
                 continue
             if g_key == "x":
@@ -550,7 +555,7 @@ class JointGraphDataset(JointBaseDataset):
     ):
         """Scale the points for both graphs"""
         # Get the combined bounding box
-        if len(node_features1) != 0 and len(node_features2) != 0:
+        if node_features1.numel() != 0 and node_features2.numel() != 0:
             scale = JointGraphDataset.get_common_scale(node_features1, node_features2)
             node_features1[:, :, :, :3] *= scale
             # Check we aren't too far out of bounds due to the masked surface
@@ -807,11 +812,12 @@ class JointGraphDataset(JointBaseDataset):
 
     def reshape_graph_features(self, g):
         """Reshape the multi-dimensional graph features from a list to tensors"""
-        g.x = torch.cat(g.x).reshape(
-            (-1, self.grid_size, self.grid_size, self.grid_channels))
-        g.entity_types = torch.cat(g.entity_types).reshape(
+        if g.x.numel() != 0:
+            g.x = g.x.reshape(
+                (-1, self.grid_size, self.grid_size, self.grid_channels))
+        g.entity_types = g.entity_types.reshape(
             (-1, len(self.entity_type_map)))
-        g.convexity = torch.cat(g.convexity).reshape(
+        g.convexity = g.convexity.reshape(
             (-1, len(self.convexity_type_map)))
         return g
 
