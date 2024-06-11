@@ -16,24 +16,14 @@ def find_axis_line(entity, return_numpy=False):
     Find an infinite line which passes through the
     middle of this entity
     """
-    axis_line = None
-    if "surface_type" in entity:
-        axis_line = find_axis_line_from_face(entity)
-    elif "curve_type" in entity:
-        axis_line = find_axis_line_from_edge(entity)
-    elif "is_degenerate" in entity and entity["is_degenerate"]:
-        return None, None
-    origin, direction = axis_line
-    if axis_line is not None:
-        if origin is not None and direction is not None and return_numpy:
-            # Convert from dict to numpy
-            origin = get_point(origin)
-            direction = get_vector(direction)
-            return origin, direction
-        else:
-            return axis_line
-    print("Invalid entity for finding a joint axis")
-    return None, None
+    origin = get_point_data(entity, "axis_pos")
+    direction = get_vector_data(entity, "axis_dir")
+    if origin is not None and direction is not None and return_numpy:
+        # Convert from dict to numpy
+        origin = get_point(origin)
+        direction = get_vector(direction)
+    return origin, direction
+
 
 
 def check_colinear_with_tolerance(axis_line1, axis_line2, angle_tol_degs=10.0, distance_tol=1e-2):

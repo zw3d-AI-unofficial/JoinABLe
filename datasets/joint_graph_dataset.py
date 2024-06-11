@@ -21,7 +21,6 @@ from utils import plot_util
 from joint import joint_axis
 from datasets.joint_base_dataset import JointBaseDataset
 
-
 class JointGraphDataset(JointBaseDataset):
 
     # The map of the entity types
@@ -31,17 +30,11 @@ class JointGraphDataset(JointBaseDataset):
         "ConeSurfaceType": 2,
         "SphereSurfaceType": 3,
         "TorusSurfaceType": 4,
-        "EllipticalCylinderSurfaceType": 5,
-        "EllipticalConeSurfaceType": 6,
-        "NurbsSurfaceType": 7,
-        "Line3DCurveType": 8,
-        "Arc3DCurveType": 9,
-        "Circle3DCurveType": 10,
-        "Ellipse3DCurveType": 11,
-        "EllipticalArc3DCurveType": 12,
-        "InfiniteLine3DCurveType": 13,
-        "NurbsCurve3DCurveType": 14,
-        "Degenerate3DCurveType": 15,  # Special case for degenerate edges
+        "NurbsSurfaceType": 5,
+        "Line3DCurveType": 6,
+        "Arc3DCurveType": 7,
+        "Circle3DCurveType": 8,
+        "NurbsCurve3DCurveType": 9
     }
     entity_type_reverse_map = {
         0: "PlaneSurfaceType",
@@ -49,26 +42,11 @@ class JointGraphDataset(JointBaseDataset):
         2: "ConeSurfaceType",
         3: "SphereSurfaceType",
         4: "TorusSurfaceType",
-        5: "EllipticalCylinderSurfaceType",
-        6: "EllipticalConeSurfaceType",
-        7: "NurbsSurfaceType",
+        5: "NurbsSurfaceType",
+        6: "Line3DCurveType",
+        7: "Arc3DCurveType",
         8: "Line3DCurveType",
-        9: "Arc3DCurveType",
-        10: "Circle3DCurveType",
-        11: "Ellipse3DCurveType",
-        12: "EllipticalArc3DCurveType",
-        13: "InfiniteLine3DCurveType",
-        14: "NurbsCurve3DCurveType",
-        15: "Degenerate3DCurveType",
-    }
-    # The map of edge convexity types
-    convexity_type_map = {
-        "None": 0,
-        "Convex": 1,
-        "Concave": 2,
-        "Smooth": 3,
-        "Non-manifold": 4,
-        "Degenerate": 5
+        9: "NurbsCurve3DCurveType"
     }
     # The different types of labels for B-Rep entities
     label_map = {
@@ -96,10 +74,16 @@ class JointGraphDataset(JointBaseDataset):
         "trimming_mask": grid_len * 1,
     }
     face_entity_feature_map = {
-        "entity_types": 8,
         "area": 1,
-        "face_reversed": 1,
-        "radius": 1
+        "axis_dir": 3,
+        "axis_pos": 3,
+        "bounding_box": 6,
+        "circumference": 1,
+        "entity_types": 6,
+        "param_1": 1,
+        "param_2": 1,
+        "reversed": 1,
+        "x_dir": 3,
     }
 
     # Edge input features and their size
@@ -108,12 +92,13 @@ class JointGraphDataset(JointBaseDataset):
         "tangents": grid_size * 3,  # grid_len * 3,
     }
     edge_entity_feature_map = {
-        "entity_types": 8,
+        "axis_dir": 3,
+        "axis_pos": 3,
+        "bounding_box": 6,
+        "entity_types": 4,
         "length": 1,
-        "edge_reversed": 1,
-        "convexity": 6,
-        "dihedral_angle": 1,
-        "radius": 1
+        "radius": 1,
+        "x_dir": 3
     }
 
     #  The map of edge joint types
@@ -143,7 +128,8 @@ class JointGraphDataset(JointBaseDataset):
         skip_far=False,
         skip_interference=False,
         skip_nurbs=False,
-        joint_type="all"
+        joint_type="all",
+        without_synthetic=False
     ):
         """
         Load the Fusion 360 Gallery joints dataset from graph data
@@ -180,6 +166,7 @@ class JointGraphDataset(JointBaseDataset):
         self.skip_interference = skip_interference
         self.skip_nurbs = skip_nurbs
         self.joint_type = joint_type
+        self.without_synthetic = without_synthetic
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -266,23 +253,34 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph = self.remap_labels(joint_graph, self.labels_on, self.labels_off)
 
         # Rotate if needed
-        if self.random_rotate and len(self.grid_input_features) > 0:
+        if self.random_rotate:
             rotation1 = self.get_random_rotation()
-            graph1.x = self.rotate_uvsolid(graph1.x, rotation1)
             rotation2 = self.get_random_rotation()
-            graph2.x = self.rotate_uvsolid(graph2.x, rotation2)
-
+            if len(self.grid_input_features) > 0:
+                graph1.x[:, :, :, :3] = self.rotate(graph1.x[:, :, :, :3], rotation1)
+                graph1.x[:, :, :, 3:6] = self.rotate(graph1.x[:, :, :, 3:6], rotation1)
+                graph2.x[:, :, :, :3] = self.rotate(graph2.x[:, :, :, :3], rotation2)
+                graph2.x[:, :, :, 3:6] = self.rotate(graph2.x[:, :, :, 3:6], rotation2)
+            if "axis_pos" in self.entity_input_features:
+                graph1.axis_pos = self.rotate(graph1.axis_pos, rotation1)
+                graph2.axis_pos = self.rotate(graph2.axis_pos, rotation2)
+            if "axis_dir" in self.entity_input_features:
+                graph1.axis_dir = self.rotate(graph1.axis_dir, rotation1)
+                graph2.axis_dir = self.rotate(graph2.axis_dir, rotation2)
+            if "x_dir" in self.entity_input_features:
+                graph1.x_dir = self.rotate(graph1.x_dir, rotation1)
+                graph2.x_dir = self.rotate(graph2.x_dir, rotation2)
+            if "bounding_box" in self.entity_input_features:
+                graph1.bounding_box[:, :3] = self.rotate(graph1.bounding_box[:, :3], rotation1)
+                graph1.bounding_box[:, 3:6] = self.rotate(graph1.bounding_box[:, 3:6], rotation1)
+                graph2.bounding_box[:, :3] = self.rotate(graph2.bounding_box[:, :3], rotation2)
+                graph2.bounding_box[:, 3:6] = self.rotate(graph2.bounding_box[:, 3:6], rotation2)
         return [graph1, graph2, joint_graph]
 
     def collate_fn_fixed_batch_size(self, batch):
-        def set_num_nodes(data):
-            if 'num_nodes' not in data:
-                data.num_nodes = data.edge_index.max().item() + 1 if data.edge_index.size(1) > 0 else 0
-            return data
-
-        bg1 = Batch.from_data_list([set_num_nodes(x[0]) for x in batch])
-        bg2 = Batch.from_data_list([set_num_nodes(x[1]) for x in batch])
-        jg = Batch.from_data_list([set_num_nodes(x[2]) for x in batch])
+        bg1 = Batch.from_data_list([x[0] for x in batch])
+        bg2 = Batch.from_data_list([x[1] for x in batch])
+        jg = Batch.from_data_list([x[2] for x in batch])
         return bg1, bg2, jg
 
     def get_train_dataloader(self, max_nodes_per_batch=0, batch_size=1, shuffle=True, num_workers=0):
@@ -504,15 +502,11 @@ class JointGraphDataset(JointBaseDataset):
         graph_json_data["directed"] = True
         return graph_json_data
 
-    def rotate_uvsolid(self, inp, rotation):
+    def rotate(self, inp, rotation):
         """Rotate the node features in the graph by a given rotation"""
-        Rmat = torch.tensor(rotation.as_matrix()).float()
-        Rmat = Rmat.to(inp.device)
-        orig_size = inp[:, :, :, :3].size()
-        inp[:, :, :, :3] = torch.mm(
-            inp[:, :, :, :3].view(-1, 3), Rmat).view(orig_size)
-        inp[:, :, :, 3:6] = torch.mm(
-            inp[:, :, :, 3:6].view(-1, 3), Rmat).view(orig_size)
+        rotation = rotation.to(inp.device)
+        orig_size = inp.size()
+        inp = torch.mm(inp.view(-1, 3), rotation).view(orig_size)
         return inp
 
     @staticmethod
@@ -540,29 +534,23 @@ class JointGraphDataset(JointBaseDataset):
         scale = (1.0 / bboxes.abs().max()) * 0.999999
         return scale
 
-    def scale_geometry(
+    def scale_features(
         self,
-        node_features1,
-        node_features2,
-        link_features1=None,
-        link_features2=None,
-        area_features1=None,
-        area_features2=None,
-        length_features1=None,
-        length_features2=None,
+        g1,
+        g2,
         bbox1=None,
         bbox2=None
     ):
         """Scale the points for both graphs"""
         # Get the combined bounding box
-        if node_features1.numel() != 0 and node_features2.numel() != 0:
-            scale = JointGraphDataset.get_common_scale(node_features1, node_features2)
-            node_features1[:, :, :, :3] *= scale
+        if g1.x and g1.x.numel() != 0 and g2.x and g2.x.numel() != 0:
+            scale = JointGraphDataset.get_common_scale(g1.x, g2.x)
+            g1.x[:, :, :, :3] *= scale
             # Check we aren't too far out of bounds due to the masked surface
-            if torch.max(node_features1[:, :, :, :3]) > 2.0 or torch.max(node_features1[:, :, :, :3]) < -2.0:
+            if torch.max(g1.x[:, :, :, :3]) > 2.0 or torch.max(g1.x[:, :, :, :3]) < -2.0:
                 return False
-            node_features2[:, :, :, :3] *= scale
-            if torch.max(node_features2[:, :, :, :3]) > 2.0 or torch.max(node_features2[:, :, :, :3]) < -2.0:
+            g2.x[:, :, :, :3] *= scale
+            if torch.max(g2.x[:, :, :, :3]) > 2.0 or torch.max(g2.x[:, :, :, :3]) < -2.0:
                 return False
         else:
             bbox_min = torch.tensor([
@@ -585,18 +573,30 @@ class JointGraphDataset(JointBaseDataset):
             max_span = torch.max(span)
             scale = 2.0 / max_span
             
-        if link_features1 is not None:
-            link_features1[:, :, :3] *= scale
-        if link_features2 is not None:
-            link_features2[:, :, :3] *= scale
-        if area_features1 is not None:
-            area_features1 *= scale
-        if area_features2 is not None:
-            area_features2 *= scale
-        if length_features1 is not None:
-            length_features1 *= scale
-        if length_features2 is not None:
-            length_features2 *= scale
+        if g1.axis_pos is not None:
+            g1.axis_pos *= scale
+            g2.axis_pos *= scale
+        if g1.bounding_box is not None:
+            g1.bounding_box *= scale
+            g2.bounding_box *= scale
+        if g1.area is not None:
+            g1.area *= scale
+            g2.area *= scale
+        if g1.circumference is not None:
+            g1.circumference *= scale
+            g2.circumference *= scale
+        if g1.param_1 is not None:
+            g1.param_1 *= scale
+            g2.param_1 *= scale
+        if g1.param_2 is not None:
+            g1.param_2 *= scale
+            g2.param_2 *= scale
+        if g1.length is not None:
+            g1.length *= scale
+            g2.length *= scale
+        if g1.radius is not None:
+            g1.radius *= scale
+            g2.radius *= scale
         return True
     
     def is_overlapping(self, box1, box2):
@@ -680,13 +680,9 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_set, joint_file_name)
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
-            scale_good = self.scale_geometry(
-                g1.x,
-                g2.x,
-                area_features1=g1.area,
-                area_features2=g2.area,
-                length_features1=g1.length,
-                length_features2=g2.length,
+            scale_good = self.scale_features(
+                g1,
+                g2,
                 bbox1=g1d["properties"]["bounding_box"],
                 bbox2=g2d["properties"]["bounding_box"],
             )
@@ -723,43 +719,25 @@ class JointGraphDataset(JointBaseDataset):
         if link_count <= 0:
             return None, None, face_count, edge_count, body_json_file
 
-        for index, node in enumerate(g_json["nodes"]):
-            self.copy_features(node, gd)
-            if "is_degenerate" in node and node["is_degenerate"]:
-                # If we have a degenerate edge we give some default values
-                node["x"] = torch.zeros((self.grid_size, self.grid_size, self.grid_channels))
-                node["entity_types"], _ = self.get_node_entity_type(node)
-                node["is_face"] = torch.tensor(0, dtype=torch.long)
-                node["area"] = torch.tensor(0, dtype=torch.float)
-                node["length"] = torch.tensor(0, dtype=torch.float)
-                node["face_reversed"] = torch.tensor(0, dtype=torch.long)
-                node["edge_reversed"] = torch.tensor(0, dtype=torch.long)
-                node["reversed"] = torch.tensor(0, dtype=torch.long)
-                node["convexity"] = self.get_node_convexity(node)
-                node["dihedral_angle"] = torch.tensor(0, dtype=torch.long)
-            else:
-                # Pull out the node features
-                node["x"] = self.get_grid_features(node, center)
-                # Pull out the surface or curve type
-                node["entity_types"], _ = self.get_node_entity_type(node)
-                # Feature indicating if this node is a B-Rep face
-                node["is_face"] = torch.tensor(int("surface_type" in node), dtype=torch.long)
-                # Feature for the area or length of the entity
-                node["area"] = self.get_node_area(node)
-                node["length"] = self.get_node_length(node)
-                # Separate features for faces and edge reversal
-                face_reversed, edge_reversed = self.get_node_face_edge_reversed(node)
-                node["face_reversed"] = face_reversed
-                node["edge_reversed"] = edge_reversed
-                # Combined feature indicating if the face/edge is reversed
-                node["reversed"] = torch.tensor(int(node["reversed"]), dtype=torch.long)
-                # Edge convexity feature
-                node["convexity"] = self.get_node_convexity(node)
-                # Dihedral Angle
-                node["dihedral_angle"] = self.get_node_dihedral_angle(node)
+        for _, node in enumerate(g_json["nodes"]):
+            # # Pull out the node features
+            # node["x"] = self.get_grid_features(node, center)
+            # Get features for axis
+            node["axis_pos"], node["axis_dir"] = self.get_node_axis(node, center)
+            # Get features for bounding box
+            node["bounding_box"] = self.get_node_bounding_box(node, center)
+            # Get features for x direction
+            node["x_dir"] = self.get_node_x_dir(node)
 
-            # Radius
-            node["radius"] = self.get_node_radius(node)
+            # Pull out the surface or curve type
+            node["entity_types"], _ = self.get_node_entity_type(node)
+            # Feature indicating if this node is a B-Rep face
+            node["is_face"] = torch.tensor(int("surface_type" in node), dtype=torch.long)
+
+            # Features for faces or edges
+            self.get_surface_params(node)
+            self.get_curve_params(node)
+
             # Remove the grid node features to save extra copying
             # as we have already pulled out what we need
             self.delete_features(node)
@@ -778,16 +756,19 @@ class JointGraphDataset(JointBaseDataset):
         """Delete node feature provided in a list"""
         # Delete the grid node features
         features_to_keep = [
-            "x",
+            # "x",
+            "axis_pos",
+            "axis_dir",
+            "bounding_box",
+            "x_dir",
             "entity_types",
             "is_face",
             "area",
-            "length",
-            "face_reversed",
-            "edge_reversed",
+            "circumference",
+            "param_1",
+            "param_2",
             "reversed",
-            "convexity",
-            "dihedral_angle",
+            "length",
             "radius"
         ]
         keys = list(node.keys())
@@ -812,13 +793,9 @@ class JointGraphDataset(JointBaseDataset):
 
     def reshape_graph_features(self, g):
         """Reshape the multi-dimensional graph features from a list to tensors"""
-        if g.x.numel() != 0:
+        if g.x and g.x.numel() != 0:
             g.x = g.x.reshape(
                 (-1, self.grid_size, self.grid_size, self.grid_channels))
-        g.entity_types = g.entity_types.reshape(
-            (-1, len(self.entity_type_map)))
-        g.convexity = g.convexity.reshape(
-            (-1, len(self.convexity_type_map)))
         return g
 
     def get_grid_features(self, node, center):
@@ -873,6 +850,31 @@ class JointGraphDataset(JointBaseDataset):
         )
         return torch.from_numpy(pts_normals_mask).float()
 
+    def get_node_axis(self, node, center):
+        if "axis_pos_x" in node:
+            origin, direction = joint_axis.find_axis_line(node, return_numpy=True)
+            origin -= center
+            return torch.from_numpy(origin).float(), torch.from_numpy(direction).float()
+        else:
+            return None, None
+
+    def get_node_bounding_box(self, node, center):
+        if "bounding_box" in node:
+            max_point = joint_axis.get_point(node["bounding_box"]["max_point"]) - center
+            min_point = joint_axis.get_point(node["bounding_box"]["min_point"]) - center
+            bounding_box = np.concatenate((max_point, min_point))
+            return torch.from_numpy(bounding_box).float()
+        else:
+            return None
+
+    def get_node_x_dir(self, node):
+        if "x_dir_x" in node:
+            x_dir = joint_axis.get_vector_data(node, "x_dir")
+            x_dir = joint_axis.get_vector(x_dir)
+            return torch.from_numpy(x_dir).float()
+        else:
+            return None
+
     def get_node_entity_type(self, node):
         """Get the entity type, either surface or curve type for the node"""
         if "surface_type" in node:
@@ -886,24 +888,32 @@ class JointGraphDataset(JointBaseDataset):
         entity_type = self.entity_type_map[entity_type_string]
         entity_type_tensor = torch.tensor(entity_type, dtype=torch.long)
         # Convert entity types to a one hot encoding
-        # for all 16 types (8 surface, 7 curve, 1 degenerate)
+        # for all 10 types (6 surface, 4 curve)
         num_entity_type_classes = len(self.entity_type_map)
         entity_type_one_hot = F.one_hot(entity_type_tensor, num_classes=num_entity_type_classes)
         return entity_type_one_hot, entity_type
-
-    def get_node_area(self, node):
-        """Get the area feature for the node"""
-        if "area" in node:
-            return torch.tensor(node["area"], dtype=torch.float)
+    
+    def get_surface_params(self, node):
+        if "surface_type" in node:
+            node["area"] = torch.tensor(node["area"], dtype=torch.float)
+            node["circumference"] = torch.tensor(node["circumference"], dtype=torch.float)
+            node["param_1"] = torch.tensor(node["param_1"], dtype=torch.float)
+            node["param_2"] = torch.tensor(node["param_2"], dtype=torch.float)
+            node["reversed"] = torch.tensor(node["reversed"], dtype=torch.long)
         else:
-            return torch.tensor(0, dtype=torch.float)
+            node["area"] = torch.tensor(-1, dtype=torch.float)
+            node["circumference"] = torch.tensor(-1, dtype=torch.float)
+            node["param_1"] = torch.tensor(-1, dtype=torch.float)
+            node["param_2"] = torch.tensor(-1, dtype=torch.float)
+            node["reversed"] = torch.tensor(-1, dtype=torch.long)
 
-    def get_node_length(self, node):
-        """Get the length feature for the node"""
-        if "length" in node:
-            return torch.tensor(node["length"], dtype=torch.float)
+    def get_curve_params(self, node):
+        if "curve_type" in node:
+            node["length"] = torch.tensor(node["length"], dtype=torch.float)
+            node["radius"] = torch.tensor(node["radius"], dtype=torch.float)
         else:
-            return torch.tensor(0, dtype=torch.float)
+            node["length"] = torch.tensor(-1, dtype=torch.float)
+            node["radius"] = torch.tensor(-1, dtype=torch.float)
 
     def get_node_area_length(self, node):
         """Get the area or length of a node"""
@@ -911,48 +921,6 @@ class JointGraphDataset(JointBaseDataset):
             return node["area"]
         elif "curve_type" in node:
             return node["length"]
-
-    def get_node_convexity(self, node):
-        """Get the convexity feature for a the node"""
-        if "surface_type" in node:
-            convexity_type_string = "None"
-        elif "curve_type" in node:
-            convexity_type_string = node["convexity"]
-        elif "is_degenerate" in node and node["is_degenerate"]:
-            convexity_type_string = "Degenerate"
-        else:
-            raise Exception("Unknown node entity type")
-        convexity_type = self.convexity_type_map[convexity_type_string]
-        convexity_type_tensor = torch.tensor(convexity_type, dtype=torch.long)
-        # Convert convexity types to a one hot encoding
-        num_convexity_type_classes = len(self.convexity_type_map)
-        return F.one_hot(convexity_type_tensor, num_classes=num_convexity_type_classes)
-
-    def get_node_dihedral_angle(self, node):
-        """Get the dihedral angle feature for the node"""
-        if "dihedral_angle" in node:
-            return torch.tensor(node["dihedral_angle"], dtype=torch.float)
-        else:
-            return torch.tensor(0, dtype=torch.float)
-
-    def get_node_radius(self, node):
-        """
-        Get the radius for circles and cylinders
-        """
-        if "radius" in node:
-            return torch.tensor(node["radius"], dtype=torch.float)
-        else:
-            return torch.tensor(-1.0, dtype=torch.float)
-
-    def get_node_face_edge_reversed(self, node):
-        """Get separate flags for node face and edge reversal"""
-        face_reversed = torch.tensor(0, dtype=torch.long)
-        edge_reversed = torch.tensor(0, dtype=torch.long)
-        if "surface_type" in node:
-            face_reversed = torch.tensor(int(node["reversed"]), dtype=torch.long)
-        elif "curve_type" in node:
-            edge_reversed = torch.tensor(int(node["reversed"]), dtype=torch.long)
-        return face_reversed, edge_reversed
 
     def add_joint_index(joint_indices, entity_index, entity_count):
         """Add a joint index to the list, checking its bounds"""
@@ -989,7 +957,11 @@ class JointGraphDataset(JointBaseDataset):
         # 6 - Hole equivalents
         label_matrix = torch.zeros((entity_count1, entity_count2), dtype=torch.long)
         joint_type_set = set()
-        for i, joint in enumerate(joints):
+        for i, joint in enumerate(joints):  
+            # Check synthetic
+            if self.without_synthetic:
+                if "is_synthetic" in joint and joint["is_synthetic"]:
+                    continue
             entity1 = joint["geometry_or_origin_one"]["entity_one"]
             entity1_index = entity1["index"]
             entity1_type = entity1["type"]
@@ -1039,30 +1011,30 @@ class JointGraphDataset(JointBaseDataset):
             # Set the user selected joint indices
             label_matrix[entity1_index][entity2_index] = self.label_map["Joint"]
             joint_type_set.add(joint_type)
-        # Include ambiguous and hole labels
-        # Adding separate labels to the label_matrix
-        # We need to do this after all joints are marked out as labels
-        g1_ambiguous, g2_ambiguous = self.set_ambiguous_labels(g1, g2, label_matrix)
-        g1_holes, g2_holes = self.set_hole_labels(g1d, g2d, label_matrix, joint_data)
+        # # Include ambiguous and hole labels
+        # # Adding separate labels to the label_matrix
+        # # We need to do this after all joints are marked out as labels
+        # g1_ambiguous, g2_ambiguous = self.set_ambiguous_labels(g1, g2, label_matrix)
+        # g1_holes, g2_holes = self.set_hole_labels(g1d, g2d, label_matrix, joint_data)
 
-        # Only do further work if we have holes or ambiguous entities
-        eq_count = len(g1_ambiguous) + len(g2_ambiguous) + len(g1_holes) + len(g2_holes)
-        if eq_count > 0:
-            # First calculate the axis lines and cache them
-            g1_axis_lines = self.get_axis_lines_from_graph(g1d)
-            g2_axis_lines = self.get_axis_lines_from_graph(g2d)
+        # # Only do further work if we have holes or ambiguous entities
+        # eq_count = len(g1_ambiguous) + len(g2_ambiguous) + len(g1_holes) + len(g2_holes)
+        # if eq_count > 0:
+        #     # First calculate the axis lines and cache them
+        #     g1_axis_lines = self.get_axis_lines_from_graph(g1d)
+        #     g2_axis_lines = self.get_axis_lines_from_graph(g2d)
 
-            # Now find and set the equivalents
-            self.set_equivalents(
-                g1_ambiguous, g2_ambiguous,
-                g1_axis_lines, g2_axis_lines,
-                label_matrix, self.label_map["AmbiguousEquivalent"]
-            )
-            self.set_equivalents(
-                g1_holes, g2_holes,
-                g1_axis_lines, g2_axis_lines,
-                label_matrix, self.label_map["HoleEquivalent"]
-            )
+        #     # Now find and set the equivalents
+        #     self.set_equivalents(
+        #         g1_ambiguous, g2_ambiguous,
+        #         g1_axis_lines, g2_axis_lines,
+        #         label_matrix, self.label_map["AmbiguousEquivalent"]
+        #     )
+        #     self.set_equivalents(
+        #         g1_holes, g2_holes,
+        #         g1_axis_lines, g2_axis_lines,
+        #         label_matrix, self.label_map["HoleEquivalent"]
+        #     )
         return label_matrix, joint_type_set
 
     def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_set, joint_file_name):
@@ -1076,7 +1048,7 @@ class JointGraphDataset(JointBaseDataset):
         # edges_between_graphs_2 = torch.cartesian_prod(nodes_indices_second_graph, nodes_indices_first_graph).transpose(1, 0)
         # edges_between_graphs = torch.cat((edges_between_graphs_1, edges_between_graphs_2), dim=0)
         num_nodes = graph1.num_nodes + graph2.num_nodes
-        empty = torch.zeros((num_nodes, 1), device=graph1.x.device)
+        empty = torch.zeros((num_nodes, 1))
         joint_graph = Data(x=empty, edge_index=edges_between_graphs_1)
         joint_graph.num_nodes = num_nodes
         joint_graph.edge_attr = label_matrix.view(-1)

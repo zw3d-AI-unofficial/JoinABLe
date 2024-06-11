@@ -175,7 +175,10 @@ def get_loggers(args, log_dir):
     #     name="tb_log"
     # )
     wandb_logger = pl.loggers.WandbLogger(
-        project="joinable", entity="zwsoft_bj", name=args.exp_name
+        project="joinable_a100", 
+        entity="fusiqiao101", 
+        name=args.exp_name, 
+        # mode="offline"
     )
     # loggers = [csv_logger, tb_logger]
     loggers = [csv_logger, wandb_logger]

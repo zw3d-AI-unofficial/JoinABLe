@@ -206,7 +206,7 @@ class JointBaseDataset(Dataset):
         angles = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
         axis = random.choice(axes)
         angle_radians = np.radians(random.choice(angles))
-        return Rotation.from_rotvec(angle_radians * axis)
+        return torch.tensor(Rotation.from_rotvec(angle_radians * axis).as_matrix()).float()
 
     @staticmethod
     def get_joint_transforms(joint_data):

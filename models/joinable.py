@@ -77,15 +77,15 @@ class EdgeMLPMPN(nn.Module):
     def __init__(self, in_channels, hidden_channels, batch_norm=False):
         super().__init__()
         layers = []
-        layers.append(nn.Conv2d(2 * in_channels, hidden_channels, kernel_size=1, bias=not batch_norm))
+        layers.append(nn.Linear(2 * in_channels, hidden_channels))
         if batch_norm:
-            layers.append(nn.BatchNorm2d(hidden_channels))
+            layers.append(nn.BatchNorm1d(hidden_channels))
         layers.append(nn.ELU())
-        layers.append(nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1, bias=not batch_norm))
+        layers.append(nn.Linear(hidden_channels, hidden_channels))
         if batch_norm:
-            layers.append(nn.BatchNorm2d(hidden_channels))
+            layers.append(nn.BatchNorm1d(hidden_channels))
         layers.append(nn.ELU())
-        layers.append(nn.Conv2d(hidden_channels, 1, kernel_size=1))
+        layers.append(nn.Linear(hidden_channels, 1))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x, edge_index):
@@ -93,7 +93,6 @@ class EdgeMLPMPN(nn.Module):
         x_src = x[src, :]
         x_dst = x[tgt, :]
         x = torch.cat([x_src, x_dst], dim=1)
-        x = x.view(x.size(0), x.size(1), 1, 1)
         x = self.net(x)
         return x.squeeze()
 
@@ -174,6 +173,7 @@ class PreJointNetFace(nn.Module):
         input_features,
         batch_norm=False,
         method="mlp",
+        feature_embedding=False
     ):
         super(PreJointNetFace, self).__init__()
         assert method in ("mlp", "cnn")
@@ -218,7 +218,7 @@ class PreJointNetFace(nn.Module):
             if len(feat.shape) == 1:
                 feat = feat.unsqueeze(1)
             if input_feature == "entity_types":
-                feat = feat[:, :8]  # Keep only the face entity types
+                feat = feat[:, :6]  # Keep only the face entity types
             ent_list.append(feat)
         return torch.cat(ent_list, dim=1).float()
 
@@ -325,7 +325,7 @@ class PreJointNetEdge(nn.Module):
             if len(feat.shape) == 1:
                 feat = feat.unsqueeze(1)
             if input_feature == "entity_types":
-                feat = feat[:, 8:]  # Keep only the edge entity types
+                feat = feat[:, 6:]  # Keep only the edge entity types
             ent_list.append(feat)
 
         return torch.cat(ent_list, dim=1).float()
@@ -430,12 +430,13 @@ class JoinABLe(nn.Module):
         reduction="sum",
         post_net="mlp",
         pre_net="mlp",
-        mpn_layer_num=2
+        mpn_layer_num=2,
+        feature_embedding=False
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction
-        self.pre_face = PreJointNetFace(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net)
-        self.pre_edge = PreJointNetEdge(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net)
+        self.pre_face = PreJointNetFace(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net, feature_embedding=feature_embedding)
+        self.pre_edge = PreJointNetEdge(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net, feature_embedding=feature_embedding)
         # self.proj = nn.Linear(hidden_dim, hidden_dim)
         self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
         self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm)

@@ -64,7 +64,7 @@ def get_parser():
     parser.add_argument(
         "--max_node_count",
         type=int,
-        default=950,
+        default=1024,
         help="Restrict training data to graph pairs with under this number of nodes.\
               Set to 0 to train on all data."
     )
@@ -132,12 +132,30 @@ def get_parser():
     parser.add_argument(
         "--input_features",
         type=str,
-        default="entity_types,length,face_reversed,edge_reversed",
+        default="entity_types,reversed,length",
         help="Input features to use as a string separated by commas.\
                 Can include: points, normals, tangents, trimming_mask,\
-                entity_types, area, length,\
-                face_reversed, edge_reversed, reversed,\
-                convexity, dihedral_angle"
+                axis_pos, axis_dir, bounding_box, entity_types, x_dir\
+                area, circumference, param_1, param_2, reversed\
+                length, radius"
+    )
+    parser.add_argument(
+        "--without_synthetic",
+        action="store_true",
+        default=False,
+        help="Skip synthetic joints."
+    )
+    parser.add_argument(
+        "--feature_embedding",
+        action="store_true",
+        default=False,
+        help="Using feature quantization and embedding."
+    )
+    parser.add_argument(
+        "--num_bits",
+        type=int,
+        default=9,
+        help="Number of bit of quantization."
     )
     return parser
 

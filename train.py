@@ -42,7 +42,8 @@ class JointPrediction(pl.LightningModule):
             reduction=args.reduction,
             post_net=args.post_net,
             pre_net=args.pre_net,
-            mpn_layer_num=args.mpn_layer_num
+            mpn_layer_num=args.mpn_layer_num,
+            feature_embedding=args.feature_embedding
         )
         self.save_hyperparameters()
         self.args = args
@@ -224,7 +225,8 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         skip_far=args.skip_far,
         skip_interference=args.skip_interference,
         skip_nurbs=args.skip_nurbs,
-        joint_type=args.joint_type
+        joint_type=args.joint_type,
+        without_synthetic=args.without_synthetic
     )
 
 
@@ -354,9 +356,7 @@ def main(args):
     os.environ['HTTP_PROXY'] = 'http://127.0.0.1:2080'
     os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:2080'
     os.environ['ALL_PROXY'] = 'socks5://127.0.0.1:2080'
-    os.environ['CUDA_LAUNCH_BLOCKING']='1'
     torch.set_float32_matmul_precision('high')
-    torch.autograd.set_detect_anomaly(True)
     seed_everything(args.seed)
     
     exp_dir = Path(args.exp_dir)
