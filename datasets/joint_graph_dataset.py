@@ -129,7 +129,9 @@ class JointGraphDataset(JointBaseDataset):
         skip_interference=False,
         skip_nurbs=False,
         joint_type="all",
-        without_synthetic=False
+        without_synthetic=False,
+        feature_embedding=False,
+        num_bits=9
     ):
         """
         Load the Fusion 360 Gallery joints dataset from graph data
@@ -152,7 +154,6 @@ class JointGraphDataset(JointBaseDataset):
         super().__init__(
             root_dir,
             split=split,
-            random_rotate=random_rotate,
             delete_cache=delete_cache,
             limit=limit,
             threads=threads,
@@ -167,6 +168,8 @@ class JointGraphDataset(JointBaseDataset):
         self.skip_nurbs = skip_nurbs
         self.joint_type = joint_type
         self.without_synthetic = without_synthetic
+        self.feature_embedding = feature_embedding
+        self.num_bits = num_bits
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -247,6 +250,15 @@ class JointGraphDataset(JointBaseDataset):
         # so we always store all features
         self.remove_all_unused_input_features()
 
+    def quantize_values(self, graph1_value, graph2_value, n_bits=9):
+        """Convert vertices in [-1., 1.] to discrete values in [0, n_bits**2 - 1]."""
+        min_range = min(torch.min(graph1_value), torch.min(graph2_value))
+        max_range = max(torch.max(graph1_value), torch.max(graph2_value))
+        range_quantize = 2**n_bits - 1
+        value_quantize1 = (graph1_value - min_range) * range_quantize / (max_range - min_range)
+        value_quantize2 = (graph2_value - min_range) * range_quantize / (max_range - min_range)
+        return value_quantize1.long(), value_quantize2.long()
+
     def __getitem__(self, idx):
         graph1, graph2, joint_graph = self.graphs[idx]
         # Remap the augmented labels
@@ -272,9 +284,29 @@ class JointGraphDataset(JointBaseDataset):
                 graph2.x_dir = self.rotate(graph2.x_dir, rotation2)
             if "bounding_box" in self.entity_input_features:
                 graph1.bounding_box[:, :3] = self.rotate(graph1.bounding_box[:, :3], rotation1)
-                graph1.bounding_box[:, 3:6] = self.rotate(graph1.bounding_box[:, 3:6], rotation1)
                 graph2.bounding_box[:, :3] = self.rotate(graph2.bounding_box[:, :3], rotation2)
+                graph1.bounding_box[:, 3:6] = self.rotate(graph1.bounding_box[:, 3:6], rotation1)
                 graph2.bounding_box[:, 3:6] = self.rotate(graph2.bounding_box[:, 3:6], rotation2)
+        
+        # Using feature quantization and embedding if needed
+        if self.feature_embedding:
+            if "axis_pos" in self.entity_input_features:
+                graph1.axis_pos, graph2.axis_pos = self.quantize_values(graph1.axis_pos, graph2.axis_pos, self.num_bits)
+            if "bounding_box" in self.entity_input_features:
+                graph1.bounding_box, graph2.bounding_box = self.quantize_values(graph1.bounding_box, graph2.bounding_box, self.num_bits)
+            if "area" in self.entity_input_features:
+                graph1.area, graph2.area = self.quantize_values(graph1.area, graph2.area, self.num_bits)
+            if "circumference" in self.entity_input_features:
+                graph1.circumference, graph2.circumference = self.quantize_values(graph1.circumference, graph2.circumference, self.num_bits)
+            if "param_1" in self.entity_input_features:
+                graph1.param_1, graph2.param_1 = self.quantize_values(graph1.param_1, graph2.param_1, self.num_bits)
+            if "param_2" in self.entity_input_features:
+                graph1.param_2, graph2.param_2 = self.quantize_values(graph1.param_2, graph2.param_2, self.num_bits)
+            if "length" in self.entity_input_features:
+                graph1.length, graph2.length = self.quantize_values(graph1.length, graph2.length, self.num_bits)
+            if "radius" in self.entity_input_features:
+                graph1.radius, graph2.radius = self.quantize_values(graph1.radius, graph2.radius, self.num_bits)
+        
         return [graph1, graph2, joint_graph]
 
     def collate_fn_fixed_batch_size(self, batch):
@@ -580,8 +612,8 @@ class JointGraphDataset(JointBaseDataset):
             g1.bounding_box *= scale
             g2.bounding_box *= scale
         if g1.area is not None:
-            g1.area *= scale
-            g2.area *= scale
+            g1.area *= scale * scale
+            g2.area *= scale * scale
         if g1.circumference is not None:
             g1.circumference *= scale
             g2.circumference *= scale

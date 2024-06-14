@@ -173,7 +173,8 @@ class PreJointNetFace(nn.Module):
         input_features,
         batch_norm=False,
         method="mlp",
-        feature_embedding=False
+        feature_embedding=False,
+        num_bits=9
     ):
         super(PreJointNetFace, self).__init__()
         assert method in ("mlp", "cnn")
@@ -208,6 +209,22 @@ class PreJointNetFace(nn.Module):
                 ent_dim = hidden_dim
             self.ent_dim = ent_dim
             self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
+
+        self.feature_embedding = feature_embedding
+        if self.feature_embedding:
+            self.input_embeddings = nn.ModuleDict({
+                'entity_types': nn.Embedding(6, hidden_dim),
+                'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
+                'axis_dir': nn.Linear(3, hidden_dim),
+                'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
+                'x_dir': nn.Linear(3, hidden_dim),
+                'area': nn.Embedding(int(2**num_bits), hidden_dim),
+                'circumference': nn.Embedding(int(2**num_bits), hidden_dim),
+                'param_1': nn.Embedding(int(2**num_bits), hidden_dim),
+                'param_2': nn.Embedding(int(2**num_bits), hidden_dim),
+                'reversed': nn.Embedding(2, hidden_dim)
+            })
+            self.model_pre_emb = mlp(hidden_dim, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
 
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
@@ -244,28 +261,40 @@ class PreJointNetFace(nn.Module):
     def forward_one_graph(self, g):
         face_node_indices = _get_face_node_indices(g)
         device = g.edge_index.device
+        if not self.feature_embedding:
         # We have both grid and entity features
-        if self.ent_feat_size > 0 and self.grid_feat_size > 0:
-            x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
-            ent = self.get_entity_features(g)
-            grid = self.get_grid_features(g)
-            ent_faces = ent[face_node_indices, :]
-            grid_faces = grid[face_node_indices, :]
-            x_ent = self.model_pre_ent(ent_faces)
-            x_grid = self.model_pre_grid(grid_faces)
-            x[face_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
-        # We have no grid features, so just use the entity features
-        elif self.ent_feat_size > 0:
-            ent = self.get_entity_features(g)
-            ent_faces = ent[face_node_indices, :]
+            if self.ent_feat_size > 0 and self.grid_feat_size > 0:
+                x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
+                ent = self.get_entity_features(g)
+                grid = self.get_grid_features(g)
+                ent_faces = ent[face_node_indices, :]
+                grid_faces = grid[face_node_indices, :]
+                x_ent = self.model_pre_ent(ent_faces)
+                x_grid = self.model_pre_grid(grid_faces)
+                x[face_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
+            # We have no grid features, so just use the entity features
+            elif self.ent_feat_size > 0:
+                ent = self.get_entity_features(g)
+                ent_faces = ent[face_node_indices, :]
+                x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
+                x[face_node_indices, :] = self.model_pre_ent(ent_faces)
+            # We have no entity features, so just use the grid
+            elif self.grid_feat_size > 0:
+                grid = self.get_grid_features(g)
+                grid_faces = grid[face_node_indices, :]
+                x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
+                x[face_node_indices, :] = self.model_pre_grid(grid_faces)
+        else:
+            input_embeds = 0
+            for key in self.entity_input_features:
+                if key in self.input_embeddings:
+                    if key == "entity_types":
+                        curr_embed = self.input_embeddings[key](torch.argmax(g[key][face_node_indices], axis=1))
+                    else:
+                        curr_embed = self.input_embeddings[key](g[key][face_node_indices])
+                    input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
             x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[face_node_indices, :] = self.model_pre_ent(ent_faces)
-        # We have no entity features, so just use the grid
-        elif self.grid_feat_size > 0:
-            grid = self.get_grid_features(g)
-            grid_faces = grid[face_node_indices, :]
-            x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
-            x[face_node_indices, :] = self.model_pre_grid(grid_faces)
+            x[face_node_indices, :] = self.model_pre_emb(input_embeds)
         return x
 
     def forward(self, g1, g2):
@@ -281,6 +310,8 @@ class PreJointNetEdge(nn.Module):
         input_features,
         batch_norm=False,
         method="mlp",
+        feature_embedding=False,
+        num_bits=9
     ):
         super(PreJointNetEdge, self).__init__()
         assert method in ("mlp", "cnn")
@@ -315,7 +346,20 @@ class PreJointNetEdge(nn.Module):
                 ent_dim = hidden_dim
             self.ent_dim = ent_dim
             self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
-
+        
+        self.feature_embedding = feature_embedding
+        if self.feature_embedding:
+            self.input_embeddings = nn.ModuleDict({
+                'entity_types': nn.Embedding(4, hidden_dim),
+                'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
+                'axis_dir': nn.Linear(3, hidden_dim),
+                'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
+                'x_dir': nn.Linear(3, hidden_dim),
+                'length': nn.Embedding(int(2**num_bits), hidden_dim),
+                'radius': nn.Embedding(int(2**num_bits), hidden_dim)
+            })
+            self.model_pre_emb = mlp(hidden_dim, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
+    
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
         ent_list = []
@@ -351,28 +395,41 @@ class PreJointNetEdge(nn.Module):
     def forward_one_graph(self, g):
         edge_node_indices = _get_edge_node_indices(g)
         device = g.edge_index.device
-        # We have both grid and entity features
-        if self.ent_feat_size > 0 and self.grid_feat_size > 0:
-            x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
-            ent = self.get_entity_features(g)
-            grid = self.get_grid_features(g)
-            ent_edges = ent[edge_node_indices, :]
-            grid_edges = grid[edge_node_indices, :]
-            x_ent = self.model_pre_ent(ent_edges)
-            x_grid = self.model_pre_grid(grid_edges)
-            x[edge_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
-        # We have no grid features, so just use the entity features
-        elif self.ent_feat_size > 0:
-            ent = self.get_entity_features(g)
-            ent_edges = ent[edge_node_indices, :]
+        if not self.feature_embedding:
+            # We have both grid and entity features
+            if self.ent_feat_size > 0 and self.grid_feat_size > 0:
+                x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
+                ent = self.get_entity_features(g)
+                grid = self.get_grid_features(g)
+                ent_edges = ent[edge_node_indices, :]
+                grid_edges = grid[edge_node_indices, :]
+                x_ent = self.model_pre_ent(ent_edges)
+                x_grid = self.model_pre_grid(grid_edges)
+                x[edge_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
+            # We have no grid features, so just use the entity features
+            elif self.ent_feat_size > 0:
+                ent = self.get_entity_features(g)
+                ent_edges = ent[edge_node_indices, :]
+                x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
+                x[edge_node_indices, :] = self.model_pre_ent(ent_edges)
+            # We have no entity features, so just use the grid
+            elif self.grid_feat_size > 0:
+                grid = self.get_grid_features(g)
+                grid_edges = grid[edge_node_indices, :]
+                x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
+                x[edge_node_indices, :] = self.model_pre_grid(grid_edges)
+        else:
+            input_embeds = 0
+            for key in self.entity_input_features:
+                curr_embed = 0
+                if key in self.input_embeddings:
+                    if key == "entity_types":
+                        curr_embed = self.input_embeddings[key](torch.argmax(g[key][edge_node_indices], axis=1) - 6)
+                    else:
+                        curr_embed = self.input_embeddings[key](g[key][edge_node_indices])
+                    input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
             x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[edge_node_indices, :] = self.model_pre_ent(ent_edges)
-        # We have no entity features, so just use the grid
-        elif self.grid_feat_size > 0:
-            grid = self.get_grid_features(g)
-            grid_edges = grid[edge_node_indices, :]
-            x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
-            x[edge_node_indices, :] = self.model_pre_grid(grid_edges)
+            x[edge_node_indices, :] = self.model_pre_emb(input_embeds)
         return x
 
     def forward(self, g1, g2):
@@ -431,12 +488,27 @@ class JoinABLe(nn.Module):
         post_net="mlp",
         pre_net="mlp",
         mpn_layer_num=2,
-        feature_embedding=False
+        feature_embedding=False,
+        num_bits=9
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction
-        self.pre_face = PreJointNetFace(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net, feature_embedding=feature_embedding)
-        self.pre_edge = PreJointNetEdge(hidden_dim, input_features, batch_norm=batch_norm, method=pre_net, feature_embedding=feature_embedding)
+        self.pre_face = PreJointNetFace(
+            hidden_dim, 
+            input_features, 
+            batch_norm=batch_norm, 
+            method=pre_net, 
+            feature_embedding=feature_embedding, 
+            num_bits=num_bits
+        )
+        self.pre_edge = PreJointNetEdge(
+            hidden_dim, 
+            input_features, 
+            batch_norm=batch_norm, 
+            method=pre_net,
+            feature_embedding=feature_embedding, 
+            num_bits=num_bits
+        )
         # self.proj = nn.Linear(hidden_dim, hidden_dim)
         self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
         self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm)
@@ -466,6 +538,10 @@ class JoinABLe(nn.Module):
         return loss
 
     def compute_loss(self, args, x, joint_graph):
+        def label_smoothing(one_hot_labels, factor):
+            num_classes = one_hot_labels.size(-1)
+            return one_hot_labels * (1 - factor) + factor / num_classes
+    
         joint_graph_unbatched = joint_graph.to_data_list()
         batch_size = len(joint_graph_unbatched)
         size_of_each_joint_graph = [np.prod(list(item.edge_attr.shape)) for item in joint_graph_unbatched]
@@ -481,6 +557,9 @@ class JoinABLe(nn.Module):
             end = start + size_i
             x_i = x[start:end]
             labels_i = joint_graph_unbatched[i].edge_attr
+            # Label smoothing
+            if args.label_smoothing != 0.0:
+                labels_i = label_smoothing(labels_i, args.label_smoothing)
             # Classification loss
             if args.loss == "bce":
                 loss_clf += self.bce_loss(x_i, labels_i, pos_weight=args.pos_weight)

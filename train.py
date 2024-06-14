@@ -43,7 +43,8 @@ class JointPrediction(pl.LightningModule):
             post_net=args.post_net,
             pre_net=args.pre_net,
             mpn_layer_num=args.mpn_layer_num,
-            feature_embedding=args.feature_embedding
+            feature_embedding=args.feature_embedding,
+            num_bits=args.num_bits
         )
         self.save_hyperparameters()
         self.args = args
@@ -226,7 +227,9 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         skip_interference=args.skip_interference,
         skip_nurbs=args.skip_nurbs,
         joint_type=args.joint_type,
-        without_synthetic=args.without_synthetic
+        without_synthetic=args.without_synthetic,
+        feature_embedding=args.feature_embedding,
+        num_bits=args.num_bits
     )
 
 

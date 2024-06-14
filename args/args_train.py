@@ -157,6 +157,12 @@ def get_parser():
         default=9,
         help="Number of bit of quantization."
     )
+    parser.add_argument(
+        "--label_smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing factor."
+    )
     return parser
 
 
