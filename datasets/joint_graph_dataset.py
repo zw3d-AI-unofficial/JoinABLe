@@ -105,13 +105,12 @@ class JointGraphDataset(JointBaseDataset):
 
     #  The map of edge joint types
     joint_type_map = {
-        "Undefine": 0,
-        "Other": 1,
-        "Coincident": 2, 
-        "Tangent": 3,
-        "Concentric": 4, 
-        "Parallel": 5,
-        "Perpendicular": 6
+        "Other": 0,
+        "Coincident": 1, 
+        "Tangent": 2,
+        "Concentric": 3, 
+        "Parallel": 4,
+        "Perpendicular": 5
     }
 
     def __init__(

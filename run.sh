@@ -25,6 +25,7 @@
 # python train.py --dataset data/zw3d-joinable-dataset --exp_name zw3d_test_23 --max_nodes_per_batch 8192 --num_workers 16 --input_features points,normals,tangents,trimming_mask --label_smoothing 0.1
 # python train.py --dataset data/zw3d-joinable-dataset --exp_name zw3d_test_24 --max_nodes_per_batch 8192 --num_workers 16 --input_features points,normals,tangents,trimming_mask --label_smoothing 0.1 --random_rotate
 # python train.py --dataset data/zw3d-joinable-dataset --exp_name zw3d_test_25 --max_nodes_per_batch 8192 --num_workers 16 --delete_cache --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --type_head
+python train.py --dataset data/zw3d-joinable-dataset --exp_name zw3d_test_26 --max_nodes_per_batch 8192 --num_workers 16 --delete_cache --input_features entity_types,area,length,points,normals,tangents,trimming_mask --label_smoothing 0.1
 
 ### test (random)
 # python train.py --traintest randomtest --dataset data/zw3d-joinable-dataset  --exp_dir pretrained --exp_name paper --checkpoint last_run_0
