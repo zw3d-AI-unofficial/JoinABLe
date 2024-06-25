@@ -24,17 +24,19 @@ from datasets.joint_base_dataset import JointBaseDataset
 class JointGraphDataset(JointBaseDataset):
 
     # The map of the entity types
-    entity_type_map = {
+    surface_type_map = {
         "PlaneSurfaceType": 0,
         "CylinderSurfaceType": 1,
         "ConeSurfaceType": 2,
         "SphereSurfaceType": 3,
         "TorusSurfaceType": 4,
         "NurbsSurfaceType": 5,
-        "Line3DCurveType": 6,
-        "Arc3DCurveType": 7,
-        "Circle3DCurveType": 8,
-        "NurbsCurve3DCurveType": 9
+    }
+    curve_type_map = {
+        "Line3DCurveType": 0,
+        "Arc3DCurveType": 1,
+        "Circle3DCurveType": 2,
+        "NurbsCurve3DCurveType": 3
     }
     entity_type_reverse_map = {
         0: "PlaneSurfaceType",
@@ -79,7 +81,7 @@ class JointGraphDataset(JointBaseDataset):
         "axis_pos": 3,
         "bounding_box": 6,
         "circumference": 1,
-        "entity_types": 6,
+        "entity_types": len(surface_type_map),
         "param_1": 1,
         "param_2": 1
     }
@@ -93,7 +95,7 @@ class JointGraphDataset(JointBaseDataset):
         "axis_dir": 3,
         "axis_pos": 3,
         "bounding_box": 6,
-        "entity_types": 4,
+        "entity_types": len(curve_type_map),
         "length": 1,
         "radius": 1,
         "start_point": 3,
@@ -103,12 +105,13 @@ class JointGraphDataset(JointBaseDataset):
 
     #  The map of edge joint types
     joint_type_map = {
-        "Other": 0,
-        "Coincident": 1, 
-        "Tangent": 2,
-        "Concentric": 3, 
-        "Parallel": 4,
-        "Perpendicular": 5
+        "Undefine": 0,
+        "Other": 1,
+        "Coincident": 2, 
+        "Tangent": 3,
+        "Concentric": 4, 
+        "Parallel": 5,
+        "Perpendicular": 6
     }
 
     def __init__(
@@ -265,10 +268,10 @@ class JointGraphDataset(JointBaseDataset):
         if graph1_indices is not None:
             quantiles = torch.quantile(
                 torch.concat((graph1_value[graph1_indices], graph2_value[graph2_indices]), dim=0).float(), 
-                torch.linspace(0, 1, num_bins - 1), dim=0
+                torch.linspace(0, 1, num_bins), dim=0
             )
-            value_quantize1[graph1_indices] = torch.bucketize(graph1_value[graph1_indices], quantiles) + 1
-            value_quantize2[graph2_indices] = torch.bucketize(graph2_value[graph2_indices], quantiles) + 1
+            value_quantize1[graph1_indices] = torch.bucketize(graph1_value[graph1_indices], quantiles)
+            value_quantize2[graph2_indices] = torch.bucketize(graph2_value[graph2_indices], quantiles)
         else:
             quantiles = torch.quantile(
                 torch.concat((graph1_value, graph2_value), dim=0).float(), 
@@ -783,12 +786,12 @@ class JointGraphDataset(JointBaseDataset):
             node["bounding_box"] = self.get_node_bounding_box(node, center)
 
             # Pull out the surface or curve type
-            node["entity_types"], _ = self.get_node_entity_type(node)
+            node["entity_types"] = self.get_node_entity_type(node)
             # Feature indicating if this node is a B-Rep face
             node["is_face"] = torch.tensor(int("surface_type" in node), dtype=torch.long)
 
             # Features for faces or edges
-            self.get_surface_params(node, center)
+            self.get_surface_params(node)
             self.get_curve_params(node, center)
 
             # Remove the grid node features to save extra copying
@@ -926,22 +929,15 @@ class JointGraphDataset(JointBaseDataset):
     def get_node_entity_type(self, node):
         """Get the entity type, either surface or curve type for the node"""
         if "surface_type" in node:
-            entity_type_string = node["surface_type"]
+            surface_type = self.surface_type_map[node["surface_type"]]
+            return torch.tensor(surface_type, dtype=torch.long)
         elif "curve_type" in node:
-            entity_type_string = node["curve_type"]
-        elif "is_degenerate" in node and node["is_degenerate"]:
-            entity_type_string = "Degenerate3DCurveType"
+            curve_type = self.curve_type_map[node["curve_type"]]
+            return torch.tensor(curve_type, dtype=torch.long)
         else:
             raise Exception("Unknown node entity type")
-        entity_type = self.entity_type_map[entity_type_string]
-        entity_type_tensor = torch.tensor(entity_type, dtype=torch.long)
-        # Convert entity types to a one hot encoding
-        # for all 10 types (6 surface, 4 curve)
-        num_entity_type_classes = len(self.entity_type_map)
-        entity_type_one_hot = F.one_hot(entity_type_tensor, num_classes=num_entity_type_classes)
-        return entity_type_one_hot, entity_type
     
-    def get_surface_params(self, node, center):
+    def get_surface_params(self, node):
         if "surface_type" in node:
             node["area"] = torch.tensor(node["area"], dtype=torch.float)
             node["circumference"] = torch.tensor(node["circumference"], dtype=torch.float)
@@ -1395,8 +1391,8 @@ class JointGraphDataset(JointBaseDataset):
 
     def is_node_match(self, node1, node2):
         """Check if the nodes match based on entity type and area/length"""
-        _, node1_type = self.get_node_entity_type(node1)
-        _, node2_type = self.get_node_entity_type(node2)
+        node1_type = self.get_node_entity_type(node1)
+        node2_type = self.get_node_entity_type(node2)
         if node1_type != node2_type:
             return False
         node1_area_length = self.get_node_area_length(node1)

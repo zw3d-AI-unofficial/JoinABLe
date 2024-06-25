@@ -1,13 +1,9 @@
 from datasets.joint_graph_dataset import JointGraphDataset
 import numpy as np
-from tqdm import tqdm
-from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.nn import Sequential, Linear, ReLU
 import torch.nn.functional as F
-import torch.optim as optim
 from torch_geometric.nn import GATv2Conv, GATConv
 from torchvision.ops.focal_loss import sigmoid_focal_loss
 
@@ -180,7 +176,7 @@ def _get_face_node_indices(g):
     return face_indices
 
 
-class PreJointNetFace(nn.Module):
+class FaceEmbedding(nn.Module):
     def __init__(
         self,
         hidden_dim,
@@ -190,8 +186,9 @@ class PreJointNetFace(nn.Module):
         feature_embedding=False,
         num_bits=9
     ):
-        super(PreJointNetFace, self).__init__()
+        super(FaceEmbedding, self).__init__()
         assert method in ("mlp", "cnn")
+        self.hidden_dim = hidden_dim
         self.method = method
         half_hidden_dim = int(hidden_dim / 2)
         # Turn the comma separated string e.g. "points,entity_types,is_face,length"
@@ -199,10 +196,10 @@ class PreJointNetFace(nn.Module):
         # - Features used in the UV grid, i.e. points, normals, trimming_mask
         # - Features related to each B-Rep entity e.g. area, length
         feat_lists = JointGraphDataset.parse_input_features_arg(input_features, input_feature_type="face")
-        self.input_features, self.grid_input_features, self.entity_input_features = feat_lists
+        _, self.grid_input_features, self.ent_input_features = feat_lists
         # Calculate the total size of each feature list
         self.grid_feat_size = JointGraphDataset.get_input_feature_size(self.grid_input_features, input_feature_type="face")
-        self.ent_feat_size = JointGraphDataset.get_input_feature_size(self.entity_input_features, input_feature_type="face")
+        self.ent_feat_size = JointGraphDataset.get_input_feature_size(self.ent_input_features, input_feature_type="face")
 
         # Setup the layers
         if self.grid_feat_size > 0:
@@ -210,7 +207,6 @@ class PreJointNetFace(nn.Module):
             # If we don't have other features use the whole hidden dimension size
             if self.ent_feat_size == 0:
                 grid_dim = hidden_dim
-            self.grid_dim = grid_dim
             if method == "mlp":
                 self.model_pre_grid = mlp(self.grid_feat_size, grid_dim, grid_dim, num_layers=2, batch_norm=batch_norm)
             else:
@@ -221,33 +217,32 @@ class PreJointNetFace(nn.Module):
             # If we don't have other features use the whole hidden dimension size
             if self.grid_feat_size == 0:
                 ent_dim = hidden_dim
-            self.ent_dim = ent_dim
-            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
+            self.feature_embedding = feature_embedding
+            if feature_embedding:
+                self.model_pre_ent = nn.ModuleDict({
+                    'entity_types': nn.Embedding(len(JointGraphDataset.surface_type_map), ent_dim),
+                    'axis_pos': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'axis_dir': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'bounding_box': nn.Embedding(int(2**num_bits), ent_dim // 6),
+                    'area': nn.Embedding(int(2**num_bits), ent_dim),
+                    'circumference': nn.Embedding(int(2**num_bits), ent_dim),
+                    'param_1': nn.Embedding(int(2**num_bits), ent_dim),
+                    'param_2': nn.Embedding(int(2**num_bits), ent_dim)
+                })
+            else:
+                self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
 
-        self.feature_embedding = feature_embedding
-        if self.feature_embedding:
-            self.input_embeddings = nn.ModuleDict({
-                'entity_types': nn.Embedding(6, hidden_dim),
-                'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                'area': nn.Embedding(int(2**num_bits), hidden_dim),
-                'circumference': nn.Embedding(int(2**num_bits), hidden_dim),
-                'param_1': nn.Embedding(int(2**num_bits), hidden_dim),
-                'param_2': nn.Embedding(int(2**num_bits), hidden_dim),
-                'reversed': nn.Embedding(2, hidden_dim)
-            })
-
-    def get_entity_features(self, g):
+    def get_entity_features(self, g, indices):
         """Get the entity features that were requested"""
         ent_list = []
-        for input_feature in self.entity_input_features:
-            feat = g[input_feature].float()
+        for input_feature in self.ent_input_features:
+            feat = g[input_feature][indices]
+            # Convert entity types to a one hot encoding
+            if input_feature == "entity_types":
+                feat = F.one_hot(feat, num_classes=len(JointGraphDataset.surface_type_map))
             # Make all features 2D
             if len(feat.shape) == 1:
                 feat = feat.unsqueeze(1)
-            if input_feature == "entity_types":
-                feat = feat[:, :6]  # Keep only the face entity types
             ent_list.append(feat)
         return torch.cat(ent_list, dim=1).float()
 
@@ -273,40 +268,30 @@ class PreJointNetFace(nn.Module):
     def forward_one_graph(self, g):
         face_node_indices = _get_face_node_indices(g)
         device = g.edge_index.device
-        if not self.feature_embedding:
-        # We have both grid and entity features
-            if self.ent_feat_size > 0 and self.grid_feat_size > 0:
-                x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
-                ent = self.get_entity_features(g)
-                grid = self.get_grid_features(g)
-                ent_faces = ent[face_node_indices, :]
-                grid_faces = grid[face_node_indices, :]
+        x = torch.zeros(g.num_nodes, self.hidden_dim, dtype=torch.float, device=device)
+
+        x_grid, x_ent = None, None
+        if self.grid_feat_size > 0:
+            grid = self.get_grid_features(g)
+            grid_faces = grid[face_node_indices, :]
+            x_grid = self.model_pre_grid(grid_faces)
+        if self.ent_feat_size > 0:
+            if self.feature_embedding:
+                x_ent = 0
+                for key in self.ent_input_features:
+                    if key in self.model_pre_ent:
+                        embedding = self.model_pre_ent[key](g[key][face_node_indices])
+                        x_ent += embedding.reshape(embedding.shape[0], -1)
+            else:
+                ent_faces = self.get_entity_features(g, face_node_indices)
                 x_ent = self.model_pre_ent(ent_faces)
-                x_grid = self.model_pre_grid(grid_faces)
-                x[face_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
-            # We have no grid features, so just use the entity features
-            elif self.ent_feat_size > 0:
-                ent = self.get_entity_features(g)
-                ent_faces = ent[face_node_indices, :]
-                x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-                x[face_node_indices, :] = self.model_pre_ent(ent_faces)
-            # We have no entity features, so just use the grid
-            elif self.grid_feat_size > 0:
-                grid = self.get_grid_features(g)
-                grid_faces = grid[face_node_indices, :]
-                x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
-                x[face_node_indices, :] = self.model_pre_grid(grid_faces)
+
+        if x_ent is None:
+            x[face_node_indices, :] = x_grid
+        elif x_grid is None:
+            x[face_node_indices, :] = x_ent
         else:
-            input_embeds = 0
-            for key in self.entity_input_features:
-                if key in self.input_embeddings:
-                    if key == "entity_types":
-                        curr_embed = self.input_embeddings[key](torch.argmax(g[key][face_node_indices], axis=1))
-                    else:
-                        curr_embed = self.input_embeddings[key](g[key][face_node_indices])
-                    input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
-            x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[face_node_indices, :] = input_embeds
+            x[face_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
         return x
 
     def forward(self, g1, g2):
@@ -315,7 +300,7 @@ class PreJointNetFace(nn.Module):
         return x1, x2
 
 
-class PreJointNetEdge(nn.Module):
+class EdgeEmbedding(nn.Module):
     def __init__(
         self,
         hidden_dim,
@@ -325,7 +310,8 @@ class PreJointNetEdge(nn.Module):
         feature_embedding=False,
         num_bits=9
     ):
-        super(PreJointNetEdge, self).__init__()
+        super(EdgeEmbedding, self).__init__()
+        self.hidden_dim = hidden_dim
         assert method in ("mlp", "cnn")
         self.method = method
         half_hidden_dim = int(hidden_dim / 2)
@@ -334,18 +320,17 @@ class PreJointNetEdge(nn.Module):
         # - Features used in the UV grid, i.e. points, normals, trimming_mask
         # - Features related to each B-Rep entity e.g. area, length
         feat_lists = JointGraphDataset.parse_input_features_arg(input_features, input_feature_type="edge")
-        self.input_features, self.grid_input_features, self.entity_input_features = feat_lists
+        _, self.grid_input_features, self.entity_input_features = feat_lists
         # Calculate the total size of each feature list
         self.grid_feat_size = JointGraphDataset.get_input_feature_size(self.grid_input_features, input_feature_type="edge")
         self.ent_feat_size = JointGraphDataset.get_input_feature_size(self.entity_input_features, input_feature_type="edge")
 
-        # layers
+        # Setup the layers
         if self.grid_feat_size > 0:
             grid_dim = half_hidden_dim
             # If we don't have other features use the whole hidden dimension size
             if self.ent_feat_size == 0:
                 grid_dim = hidden_dim
-            self.grid_dim = grid_dim
             if self.method == "mlp":
                 self.model_pre_grid = mlp(self.grid_feat_size, grid_dim, grid_dim, num_layers=2, batch_norm=batch_norm)
             else:
@@ -356,32 +341,36 @@ class PreJointNetEdge(nn.Module):
             # If we don't have other features use the whole hidden dimension size
             if self.grid_feat_size == 0:
                 ent_dim = hidden_dim
-            self.ent_dim = ent_dim
-            self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
+            self.feature_embedding = feature_embedding
+            if self.feature_embedding:
+                self.model_pre_ent = nn.ModuleDict({
+                    'entity_types': nn.Embedding(len(JointGraphDataset.curve_type_map), ent_dim),
+                    'axis_pos': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'axis_dir': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'bounding_box': nn.Embedding(int(2**num_bits), ent_dim // 6),
+                    'length': nn.Embedding(int(2**num_bits), ent_dim),
+                    'radius': nn.Embedding(int(2**num_bits), ent_dim),
+                    'start_point': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'middle_point': nn.Embedding(int(2**num_bits), ent_dim // 3),
+                    'end_point': nn.Embedding(int(2**num_bits), ent_dim // 3)
+                })
+            else:
+                self.model_pre_ent = mlp(self.ent_feat_size, ent_dim, ent_dim, num_layers=2, batch_norm=batch_norm)
         
-        self.feature_embedding = feature_embedding
-        if self.feature_embedding:
-            self.input_embeddings = nn.ModuleDict({
-                'entity_types': nn.Embedding(4, hidden_dim),
-                'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                'length': nn.Embedding(int(2**num_bits), hidden_dim),
-                'radius': nn.Embedding(int(2**num_bits), hidden_dim)
-            })
+        
     
-    def get_entity_features(self, g):
+    def get_entity_features(self, g, indices):
         """Get the entity features that were requested"""
         ent_list = []
         for input_feature in self.entity_input_features:
-            feat = g[input_feature].float()
+            feat = g[input_feature][indices]
+            if input_feature == "entity_types":
+                # Convert entity types to a one hot encoding
+                feat = F.one_hot(feat, num_classes=len(JointGraphDataset.curve_type_map))
             # Make all features 2D
             if len(feat.shape) == 1:
                 feat = feat.unsqueeze(1)
-            if input_feature == "entity_types":
-                feat = feat[:, 6:]  # Keep only the edge entity types
             ent_list.append(feat)
-
         return torch.cat(ent_list, dim=1).float()
 
     def get_grid_features(self, g):
@@ -405,42 +394,31 @@ class PreJointNetEdge(nn.Module):
     def forward_one_graph(self, g):
         edge_node_indices = _get_edge_node_indices(g)
         device = g.edge_index.device
-        if not self.feature_embedding:
-            # We have both grid and entity features
-            if self.ent_feat_size > 0 and self.grid_feat_size > 0:
-                x = torch.zeros(g.num_nodes, self.grid_dim + self.ent_dim, dtype=torch.float, device=device)
-                ent = self.get_entity_features(g)
-                grid = self.get_grid_features(g)
-                ent_edges = ent[edge_node_indices, :]
-                grid_edges = grid[edge_node_indices, :]
+        x = torch.zeros(g.num_nodes, self.hidden_dim, dtype=torch.float, device=device)
+
+        x_grid, x_ent = None, None
+        if self.grid_feat_size > 0:
+            grid = self.get_grid_features(g)
+            grid_edges = grid[edge_node_indices, :]
+            x_grid = self.model_pre_grid(grid_edges)
+        if self.ent_feat_size > 0:
+            if self.feature_embedding:
+                x_ent = 0
+                for key in self.entity_input_features:
+                    if key in self.model_pre_ent:
+                        embedding = self.model_pre_ent[key](g[key][edge_node_indices])
+                        x_ent += embedding.reshape(embedding.shape[0], -1)
+            else:
+                ent_edges = self.get_entity_features(g, edge_node_indices)
                 x_ent = self.model_pre_ent(ent_edges)
-                x_grid = self.model_pre_grid(grid_edges)
-                x[edge_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
-            # We have no grid features, so just use the entity features
-            elif self.ent_feat_size > 0:
-                ent = self.get_entity_features(g)
-                ent_edges = ent[edge_node_indices, :]
-                x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-                x[edge_node_indices, :] = self.model_pre_ent(ent_edges)
-            # We have no entity features, so just use the grid
-            elif self.grid_feat_size > 0:
-                grid = self.get_grid_features(g)
-                grid_edges = grid[edge_node_indices, :]
-                x = torch.zeros(g.num_nodes, self.grid_dim, dtype=torch.float, device=device)
-                x[edge_node_indices, :] = self.model_pre_grid(grid_edges)
+
+        if x_ent is None:
+            x[edge_node_indices, :] = x_grid
+        elif x_grid is None:
+            x[edge_node_indices, :] = x_ent
         else:
-            input_embeds = 0
-            for key in self.entity_input_features:
-                curr_embed = 0
-                if key in self.input_embeddings:
-                    if key == "entity_types":
-                        curr_embed = self.input_embeddings[key](torch.argmax(g[key][edge_node_indices], axis=1) - 6)
-                    else:
-                        curr_embed = self.input_embeddings[key](g[key][edge_node_indices])
-                    input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
-            x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[edge_node_indices, :] = input_embeds
-        return x
+            x[edge_node_indices, :] = torch.cat((x_grid, x_ent), dim=1)
+        return x    
 
     def forward(self, g1, g2):
         x1 = self.forward_one_graph(g1)
@@ -504,7 +482,7 @@ class JoinABLe(nn.Module):
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction
-        self.pre_face = PreJointNetFace(
+        self.pre_face = FaceEmbedding(
             hidden_dim, 
             input_features, 
             batch_norm=batch_norm, 
@@ -512,7 +490,7 @@ class JoinABLe(nn.Module):
             feature_embedding=feature_embedding, 
             num_bits=num_bits
         )
-        self.pre_edge = PreJointNetEdge(
+        self.pre_edge = EdgeEmbedding(
             hidden_dim, 
             input_features, 
             batch_norm=batch_norm, 

@@ -13,7 +13,7 @@ def get_parser():
     parser.add_argument(
         "--pre_net",
         type=str,
-        default="mlp",
+        default="cnn",
         choices=("mlp", "cnn"),
         help="Type of network to use in the pre-net."
     )
@@ -154,7 +154,7 @@ def get_parser():
     parser.add_argument(
         "--num_bits",
         type=int,
-        default=9,
+        default=8,
         help="Number of bit of quantization."
     )
     parser.add_argument(

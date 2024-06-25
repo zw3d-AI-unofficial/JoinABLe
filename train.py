@@ -277,35 +277,27 @@ def get_trainer(args, loggers, callbacks=None, mode="train"):
     """Get the PyTorch Lightning Trainer"""
     log_every_n_steps = 100
     if mode == "train":
-        # # Distributed training
-        # if torch.cuda.device_count() > 1 and args.accelerator != "None":
-        #     trainer = Trainer(
-        #         max_epochs=args.epochs,
-        #         devices=args.gpus,
-        #         strategy=args.accelerator,
-        #         log_every_n_steps=log_every_n_steps,
-        #         callbacks=callbacks,
-        #         logger=loggers,
-        #         sync_batchnorm=args.batch_norm
-        #     )
-        # # Single GPU training
-        # else:
-        #     trainer = Trainer(
-        #         max_epochs=args.epochs,
-        #         devices=args.gpus,
-        #         log_every_n_steps=log_every_n_steps,
-        #         callbacks=callbacks,
-        #         logger=loggers,
-        #         sync_batchnorm=args.batch_norm
-        #     )
-        trainer = Trainer(
-            max_epochs=args.epochs,
-            devices=[0],
-            log_every_n_steps=log_every_n_steps,
-            callbacks=callbacks,
-            logger=loggers,
-            sync_batchnorm=args.batch_norm
-        )
+        # Distributed training
+        if torch.cuda.device_count() > 1 and args.accelerator != "None":
+            trainer = Trainer(
+                max_epochs=args.epochs,
+                devices=args.gpus,
+                strategy=args.accelerator,
+                log_every_n_steps=log_every_n_steps,
+                callbacks=callbacks,
+                logger=loggers,
+                sync_batchnorm=args.batch_norm
+            )
+        # Single GPU training
+        else:
+            trainer = Trainer(
+                max_epochs=args.epochs,
+                devices=args.gpus,
+                log_every_n_steps=log_every_n_steps,
+                callbacks=callbacks,
+                logger=loggers,
+                sync_batchnorm=args.batch_norm
+            )
     elif mode == "evaluation":
         trainer = Trainer(
             accelerator="cpu",
