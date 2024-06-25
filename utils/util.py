@@ -170,16 +170,12 @@ def get_loggers(args, log_dir):
         log_dir,
         name="log"
     )
-    # tb_logger = pl.loggers.TensorBoardLogger(
-    #     log_dir,
-    #     name="tb_log"
-    # )
+    # return [csv_logger]
     wandb_logger = pl.loggers.WandbLogger(
-        project="joinable_a100", 
+        project="joinable_new", 
         entity="fusiqiao101", 
         name=args.exp_name, 
         # mode="offline"
     )
-    # loggers = [csv_logger, tb_logger]
     loggers = [csv_logger, wandb_logger]
     return loggers

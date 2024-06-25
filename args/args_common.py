@@ -33,7 +33,7 @@ def get_parser():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=100,
+        default=50,
         help="Number of epochs to train."
     )
     parser.add_argument(
@@ -44,8 +44,8 @@ def get_parser():
     )
     parser.add_argument(
         "--batch_norm",
-        action="store_true",
-        default=False,
+        type=bool,
+        default=True,
         help="Whether to use BatchNorm."
     )
     parser.add_argument(

@@ -44,7 +44,8 @@ class JointPrediction(pl.LightningModule):
             pre_net=args.pre_net,
             mpn_layer_num=args.mpn_layer_num,
             feature_embedding=args.feature_embedding,
-            num_bits=args.num_bits
+            num_bits=args.num_bits,
+            type_head=args.type_head
         )
         self.save_hyperparameters()
         self.args = args
@@ -68,8 +69,36 @@ class JointPrediction(pl.LightningModule):
         jg.edge_attr = jg.edge_attr.long()
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
+        if self.args.type_head:
+            x, x_type = x
+            precision_type = self.model.precision_type(x_type, jg.joint_type_list)
+            self.log("train_type_acc", precision_type, on_step=False, on_epoch=True, logger=True)
+
+        top_k = [0, 0, 0]
+        graph_one_unbatched = g1.to_data_list()
+        graph_two_unbatched = g2.to_data_list()
+        joint_graph_unbatched = jg.to_data_list()
+        size_of_each_joint_graph = [np.prod(list(item.edge_attr.shape)) for item in joint_graph_unbatched]
+        batch_size = len(joint_graph_unbatched)
+        start = 0
+        for i in range(batch_size):
+            size_i = size_of_each_joint_graph[i]
+            end = start + size_i
+            top_k_i = self.model.precision_at_top_k(
+                x[start: end], 
+                joint_graph_unbatched[i].edge_attr, 
+                graph_one_unbatched[i].num_nodes, 
+                graph_two_unbatched[i].num_nodes, 
+                k=[1,5,50]
+            )
+            for j in range(len(top_k)):
+                top_k[j] += top_k_i[j]
+            start = end
         # Log the run at every epoch, although this gets reduced via mean to a float
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, logger=True)
+        self.log("train_top_1", top_k[0] / batch_size, on_step=False, on_epoch=True, logger=True)
+        self.log("train_top_5", top_k[1] / batch_size, on_step=False, on_epoch=True, logger=True)
+        self.log("train_top_50", top_k[2] / batch_size, on_step=False, on_epoch=True, logger=True)
         return loss
 
     def training_step_end(self):
@@ -95,10 +124,16 @@ class JointPrediction(pl.LightningModule):
         jg.edge_attr = jg.edge_attr.long()
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
-        top_1 = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes, k=1)
+        if self.args.type_head:
+            x, x_type = x
+            precision_type = self.model.precision_type(x_type, jg.joint_type_list)
+            self.log("val_type_acc", precision_type, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes, k=[1,5,50])
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("val_top_1", top_1, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        return {"loss": loss, "top_1": top_1}
+        self.log("val_top_1", top_k[0], on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_top_5", top_k[1], on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log("val_top_50", top_k[2], on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        return {"loss": loss, "top_1": top_k[0]}
 
     def test_step(self, batch, batch_idx):
         # Get the split we are using from the dataset
@@ -108,8 +143,13 @@ class JointPrediction(pl.LightningModule):
         jg.edge_attr = jg.edge_attr.long()
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
+        if self.args.type_head:
+            x, x_type = x
+            precision_type = self.model.precision_type(x_type, jg.joint_type_list)
+            self.log("test_type_acc", precision_type, on_step=False, on_epoch=True, logger=True)
+
         # Get the probabilities and calculate metrics
-        prob = F.softmax(x, dim=0)
+        # prob = F.softmax(x, dim=0)
         # self.test_iou.update(prob, jg.edge_attr)
         # self.test_accuracy.update(prob, jg.edge_attr)
         # Calculate the precision at k with a default sequence of k
@@ -130,7 +170,7 @@ class JointPrediction(pl.LightningModule):
         #     top_1_no_holes = top_1
 
         for key, value in JointGraphDataset.joint_type_map.items():
-            if value in jg.joint_type_set[0]:
+            if value in jg.joint_type_list:
                 self.log(f"eval_{split}_top_1_{key}", top_1, on_step=False, on_epoch=True, logger=True)
 
         self.test_step_outputs.append({

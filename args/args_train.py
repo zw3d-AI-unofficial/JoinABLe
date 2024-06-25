@@ -132,12 +132,12 @@ def get_parser():
     parser.add_argument(
         "--input_features",
         type=str,
-        default="entity_types,reversed,length",
+        default="entity_types,length,area",
         help="Input features to use as a string separated by commas.\
                 Can include: points, normals, tangents, trimming_mask,\
-                axis_pos, axis_dir, bounding_box, entity_types, x_dir\
-                area, circumference, param_1, param_2, reversed\
-                length, radius"
+                axis_pos, axis_dir, bounding_box, entity_types\
+                area, circumference, param_1, param_2\
+                length, radius, start_point, middle_point, end_point"
     )
     parser.add_argument(
         "--without_synthetic",
@@ -162,6 +162,12 @@ def get_parser():
         type=float,
         default=0.0,
         help="Label smoothing factor."
+    )
+    parser.add_argument(
+        "--type_head",
+        action="store_true",
+        default=False,
+        help="Using type head."
     )
     return parser
 

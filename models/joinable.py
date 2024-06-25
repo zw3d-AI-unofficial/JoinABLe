@@ -74,7 +74,7 @@ class EdgeMLPMPN(nn.Module):
     Performs message passing in the joint graph (connecting the two bodies)
     to predict edge logits by using an MLP (1x1 convolutions)
     """
-    def __init__(self, in_channels, hidden_channels, batch_norm=False):
+    def __init__(self, in_channels, hidden_channels, out_channels=1, batch_norm=False):
         super().__init__()
         layers = []
         layers.append(nn.Linear(2 * in_channels, hidden_channels))
@@ -85,16 +85,18 @@ class EdgeMLPMPN(nn.Module):
         if batch_norm:
             layers.append(nn.BatchNorm1d(hidden_channels))
         layers.append(nn.ELU())
-        layers.append(nn.Linear(hidden_channels, 1))
+        layers.append(nn.Linear(hidden_channels, out_channels))
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x, edge_index):
-        src, tgt = edge_index[0], edge_index[1]
+    def forward(self, x, edge_index, squeeze=True):
+        src, tgt = edge_index[0].long(), edge_index[1].long()
         x_src = x[src, :]
         x_dst = x[tgt, :]
         x = torch.cat([x_src, x_dst], dim=1)
         x = self.net(x)
-        return x.squeeze()
+        if squeeze:
+            return x.squeeze()
+        return x
 
 
 def prepare_features_for_joint_graph(x1, x2, jg):
@@ -122,7 +124,7 @@ def prepare_features_for_joint_graph(x1, x2, jg):
 
 
 class PostJointNet(nn.Module):
-    def __init__(self, hidden_dim, dropout=0.0, reduction="sum", method="mlp", batch_norm=False):
+    def __init__(self, hidden_dim, dropout=0.0, reduction="sum", method="mlp", batch_norm=False, type_head=False):
         super(PostJointNet, self).__init__()
         self.hidden_dim = hidden_dim
         self.reduction = reduction
@@ -132,11 +134,15 @@ class PostJointNet(nn.Module):
         if method not in ("mm", "mlp"):
             raise NotImplemented("Expected 'method' to be 'mm' or 'mlp'")
         self.dropout = nn.Dropout(dropout)
+        self.type_head = type_head
 
         if self.method == "mm":
             self.mpn = EdgeDotProductMPN()
         elif self.method == "mlp":
             self.mpn = EdgeMLPMPN(hidden_dim, hidden_dim, batch_norm=batch_norm)
+
+        if self.type_head:
+            self.type_mlp = EdgeMLPMPN(hidden_dim, hidden_dim, out_channels=len(JointGraphDataset.joint_type_map), batch_norm=batch_norm)
 
         # for m in self.modules():
         #     if isinstance(m, (nn.Linear, nn.Conv2d)):
@@ -151,6 +157,14 @@ class PostJointNet(nn.Module):
         x2 = self.dropout(x2)
         x = prepare_features_for_joint_graph(x1, x2, jg)
         logits = self.mpn(x, jg.edge_index)
+        if self.type_head:
+            edge_index = [torch.tensor([]).to(x.device), torch.tensor([]).to(x.device)]
+            for item in jg.to_data_list():
+                index = torch.where(item.edge_attr == 1)[0]
+                edge_index[0] = torch.concat((edge_index[0], (index // item.num_nodes_graph1)))
+                edge_index[1] = torch.concat((edge_index[1], torch.remainder(index, item.num_nodes_graph1)))
+            type_logits = self.type_mlp(x, edge_index, squeeze=False)
+            return [logits, type_logits]
         return logits
 
 
@@ -215,16 +229,14 @@ class PreJointNetFace(nn.Module):
             self.input_embeddings = nn.ModuleDict({
                 'entity_types': nn.Embedding(6, hidden_dim),
                 'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'axis_dir': nn.Linear(3, hidden_dim),
+                'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
                 'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                'x_dir': nn.Linear(3, hidden_dim),
                 'area': nn.Embedding(int(2**num_bits), hidden_dim),
                 'circumference': nn.Embedding(int(2**num_bits), hidden_dim),
                 'param_1': nn.Embedding(int(2**num_bits), hidden_dim),
                 'param_2': nn.Embedding(int(2**num_bits), hidden_dim),
                 'reversed': nn.Embedding(2, hidden_dim)
             })
-            self.model_pre_emb = mlp(hidden_dim, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
 
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
@@ -294,7 +306,7 @@ class PreJointNetFace(nn.Module):
                         curr_embed = self.input_embeddings[key](g[key][face_node_indices])
                     input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
             x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[face_node_indices, :] = self.model_pre_emb(input_embeds)
+            x[face_node_indices, :] = input_embeds
         return x
 
     def forward(self, g1, g2):
@@ -352,13 +364,11 @@ class PreJointNetEdge(nn.Module):
             self.input_embeddings = nn.ModuleDict({
                 'entity_types': nn.Embedding(4, hidden_dim),
                 'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                'axis_dir': nn.Linear(3, hidden_dim),
+                'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
                 'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                'x_dir': nn.Linear(3, hidden_dim),
                 'length': nn.Embedding(int(2**num_bits), hidden_dim),
                 'radius': nn.Embedding(int(2**num_bits), hidden_dim)
             })
-            self.model_pre_emb = mlp(hidden_dim, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
     
     def get_entity_features(self, g):
         """Get the entity features that were requested"""
@@ -429,7 +439,7 @@ class PreJointNetEdge(nn.Module):
                         curr_embed = self.input_embeddings[key](g[key][edge_node_indices])
                     input_embeds += curr_embed.reshape(curr_embed.shape[0], -1)
             x = torch.zeros(g.num_nodes, self.ent_dim, dtype=torch.float, device=device)
-            x[edge_node_indices, :] = self.model_pre_emb(input_embeds)
+            x[edge_node_indices, :] = input_embeds
         return x
 
     def forward(self, g1, g2):
@@ -489,7 +499,8 @@ class JoinABLe(nn.Module):
         pre_net="mlp",
         mpn_layer_num=2,
         feature_embedding=False,
-        num_bits=9
+        num_bits=9,
+        type_head=False
     ):
         super(JoinABLe, self).__init__()
         self.reduction = reduction
@@ -511,7 +522,26 @@ class JoinABLe(nn.Module):
         )
         # self.proj = nn.Linear(hidden_dim, hidden_dim)
         self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
-        self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm)
+        self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm, type_head=type_head)
+
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, mean=0, std=1)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, GATConv):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, g1, g2, jg):
         # Compute the features for the is_face nodes, and set the rest to zero
@@ -549,10 +579,16 @@ class JoinABLe(nn.Module):
         num_nodes_graph2 = [item.num_nodes_graph2 for item in joint_graph_unbatched]
 
         # Compute loss individually with each joint in the batch
-        start = 0
         loss_clf = 0
         loss_sym = 0
-        for i in range(len(joint_graph_unbatched)):
+        loss_type = 0
+        start = 0
+
+        if args.type_head:
+            x, type_x = x
+            loss_type = F.cross_entropy(type_x, joint_graph.joint_type_list)
+
+        for i in range(batch_size):
             size_i = size_of_each_joint_graph[i]
             end = start + size_i
             x_i = x[start:end]
@@ -572,7 +608,7 @@ class JoinABLe(nn.Module):
             start = end
 
         # Total loss
-        loss = loss_clf + loss_sym
+        loss = loss_clf + loss_sym + loss_type
         if self.reduction == "mean":
             loss = loss / float(batch_size)
         else:
@@ -632,3 +668,7 @@ class JoinABLe(nn.Module):
         if k is None:
             k = metrics.get_k_sequence()
         return metrics.hit_at_top_k(logits, labels, k=k)
+
+    def precision_type(self, logits, labels):
+        predicted = torch.argmax(logits, dim=1)
+        return torch.sum(predicted == labels).item() / len(labels)
