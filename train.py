@@ -33,20 +33,7 @@ from models.joinable import JoinABLe
 class JointPrediction(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
-        self.model = JoinABLe(
-            args.hidden,
-            args.input_features,
-            dropout=args.dropout,
-            mpn=args.mpn,
-            batch_norm=args.batch_norm,
-            reduction=args.reduction,
-            post_net=args.post_net,
-            pre_net=args.pre_net,
-            mpn_layer_num=args.mpn_layer_num,
-            feature_embedding=args.feature_embedding,
-            num_bits=args.num_bits,
-            type_head=args.type_head
-        )
+        self.model = JoinABLe(args)
         self.save_hyperparameters()
         self.args = args
         # self.test_iou = torchmetrics.IoU(
@@ -74,7 +61,7 @@ class JointPrediction(pl.LightningModule):
         
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
-        if self.args.type_head:
+        if self.args.with_type:
             x, x_type = x
             type_acc = self.model.precision_type(x_type, jg.joint_type_list)
             self.log("train_type_acc", type_acc, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
@@ -96,8 +83,8 @@ class JointPrediction(pl.LightningModule):
                 top_k[j] += top_k_i[j]
             start = end
         # Log the run at every epoch, although this gets reduced via mean to a float
-        self.log("train_loss", loss, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
-        self.log("train_top_1", top_k[0] / batch_size, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=batch_size)
+        self.log("train_top_1", top_k[0] / batch_size, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=batch_size)
         self.log("train_top_5", top_k[1] / batch_size, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
         self.log("train_top_50", top_k[2] / batch_size, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
         return loss
@@ -125,13 +112,13 @@ class JointPrediction(pl.LightningModule):
         jg.edge_attr = jg.edge_attr.long()
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
-        if self.args.type_head:
+        if self.args.with_type:
             x, x_type = x
             precision_type = self.model.precision_type(x_type, jg.joint_type_list)
             self.log("val_type_acc", precision_type, on_step=False, on_epoch=True, logger=True, batch_size=1)
         top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes, k=[1,5,50])
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
-        self.log("val_top_1", top_k[0], on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=1)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True, batch_size=1)
+        self.log("val_top_1", top_k[0], on_step=False, on_epoch=True, prog_bar=False, logger=True, batch_size=1)
         self.log("val_top_5", top_k[1], on_step=False, on_epoch=True, logger=True, batch_size=1)
         self.log("val_top_50", top_k[2], on_step=False, on_epoch=True, logger=True, batch_size=1)
         return {"loss": loss, "top_1": top_k[0]}
@@ -144,7 +131,7 @@ class JointPrediction(pl.LightningModule):
         jg.edge_attr = jg.edge_attr.long()
         x = self.model(g1, g2, jg)
         loss = self.model.compute_loss(self.args, x, jg)
-        if self.args.type_head:
+        if self.args.with_type:
             x, x_type = x
             precision_type = self.model.precision_type(x_type, jg.joint_type_list)
             self.log("test_type_acc", precision_type, on_step=False, on_epoch=True, logger=True, batch_size=1)
@@ -155,9 +142,10 @@ class JointPrediction(pl.LightningModule):
         # self.test_accuracy.update(prob, jg.edge_attr)
         # Calculate the precision at k with a default sequence of k
         top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes)
-        top_1 = top_k[0]
         self.log(f"eval_{split}_loss", loss, on_step=False, on_epoch=True, logger=True, batch_size=1)
-        self.log(f"eval_{split}_top_1", top_1, on_step=False, on_epoch=True, logger=True, batch_size=1)
+        self.log(f"eval_{split}_top_1", top_k[0], on_step=False, on_epoch=True, logger=True, batch_size=1)
+        self.log(f"eval_{split}_top_5", top_k[4], on_step=False, on_epoch=True, logger=True, batch_size=1)
+        self.log(f"eval_{split}_top_50", top_k[9], on_step=False, on_epoch=True, logger=True, batch_size=1)
         # Log evaluation based on if there are holes or not
         # Batch size 1 and no shuffle lets us use the batch index
         has_holes = self._trainer.test_dataloaders.dataset.has_holes[batch_idx]
@@ -172,7 +160,7 @@ class JointPrediction(pl.LightningModule):
 
         for key, value in JointGraphDataset.joint_type_map.items():
             if value in jg.joint_type_list:
-                self.log(f"eval_{split}_top_1_{key}", top_1, on_epoch=True, logger=True, batch_size=1)
+                self.log(f"eval_{split}_top_1_{key}", top_k[0], on_epoch=True, logger=True, batch_size=1)
 
         self.test_step_outputs.append({
             "loss": loss,
@@ -267,10 +255,10 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         skip_far=args.skip_far,
         skip_interference=args.skip_interference,
         skip_nurbs=args.skip_nurbs,
+        skip_synthetic=args.skip_synthetic,
         joint_type=args.joint_type,
-        without_synthetic=args.without_synthetic,
-        feature_embedding=args.feature_embedding,
-        num_bits=args.num_bits
+        quantize=args.quantize,
+        n_bits=args.n_bits
     )
 
 
@@ -286,8 +274,7 @@ def get_trainer(args, loggers, callbacks=None, mode="train"):
                 strategy=args.accelerator,
                 log_every_n_steps=log_every_n_steps,
                 callbacks=callbacks,
-                logger=loggers,
-                sync_batchnorm=args.batch_norm
+                logger=loggers
             )
         # Single GPU training
         else:
@@ -296,8 +283,7 @@ def get_trainer(args, loggers, callbacks=None, mode="train"):
                 devices=args.gpus,
                 log_every_n_steps=log_every_n_steps,
                 callbacks=callbacks,
-                logger=loggers,
-                sync_batchnorm=args.batch_norm
+                logger=loggers
             )
     elif mode == "evaluation":
         trainer = Trainer(

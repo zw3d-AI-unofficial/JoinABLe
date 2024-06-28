@@ -11,29 +11,74 @@ def get_parser():
     """Return the training args parser"""
     parser = args_common.get_parser()
     parser.add_argument(
-        "--pre_net",
+        "--input_features",
         type=str,
-        default="cnn",
-        choices=("mlp", "cnn"),
-        help="Type of network to use in the pre-net."
+        default="entity_types,area,length,points,normals,tangents,trimming_mask",
+        help="Input features to use as a string separated by commas.\
+                Can include: points, normals, tangents, trimming_mask,\
+                axis_pos, axis_dir, bounding_box, entity_types\
+                area, circumference, param_1, param_2\
+                length, radius, start_point, middle_point, end_point"
     )
     parser.add_argument(
-        "--max_nodes_per_batch",
+        "--quantize",
+        action="store_true",
+        default=False,
+        help="Using feature quantization."
+    )
+    parser.add_argument(
+        "--n_bits",
         type=int,
-        default=0,
-        help="Max nodes in a 'dynamic' batch while training. Set to 0 to disable and use a fixed batch size."
+        default=8,
+        help="Number of bit of quantization."
     )
     parser.add_argument(
-        "--hidden",
+        "--n_layer_gat",
+        type=int,
+        default=2,
+        help="Number of GAT layers."
+    )
+    parser.add_argument(
+        "--n_layer_sat",
+        type=int,
+        default=2,
+        help="Number of Self-Attantion layers."
+    )
+    parser.add_argument(
+        "--n_layer_cat",
+        type=int,
+        default=2,
+        help="Number of Cross-Attantion layers."
+    )
+    parser.add_argument(
+        "--n_layer_head1",
+        type=int,
+        default=2,
+        help="Number of joint prediction layers."
+    )
+    parser.add_argument(
+        "--with_type",
+        action="store_true",
+        default=False,
+        help="Use type head."
+    )
+    parser.add_argument(
+        "--n_layer_head2",
+        type=int,
+        default=2,
+        help="Number of joint type prediction layers."
+    )
+    parser.add_argument(
+        "--n_head",
+        type=int,
+        default=8,
+        help="Number of attantion heads."
+    )
+    parser.add_argument(
+        "--n_embd",
         type=int,
         default=384,
         help="Number of hidden units."
-    )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=0.0001,
-        help="Initial learning rate."
     )
     parser.add_argument(
         "--dropout",
@@ -42,24 +87,10 @@ def get_parser():
         help="Dropout rate."
     )
     parser.add_argument(
-        "--mpn",
-        type=str,
-        choices=("gat", "gatv2"),
-        default="gatv2",
-        help="Message passing network to use."
-    )
-    parser.add_argument(
-        "--mpn_layer_num",
-        type=int,
-        default="2",
-        help="The number of the layers of the MPN."
-    )
-    parser.add_argument(
-        "--post_net",
-        type=str,
-        choices=("mm", "mlp"),
-        default="mlp",
-        help="Post network method."
+        "--bias",
+        action="store_true",
+        default=False,
+        help="Use bias in mlp."
     )
     parser.add_argument(
         "--max_node_count",
@@ -67,6 +98,18 @@ def get_parser():
         default=1024,
         help="Restrict training data to graph pairs with under this number of nodes.\
               Set to 0 to train on all data."
+    )
+    parser.add_argument(
+        "--max_nodes_per_batch",
+        type=int,
+        default=0,
+        help="Max nodes in a 'dynamic' batch while training. Set to 0 to disable and use a fixed batch size."
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.0001,
+        help="Initial learning rate."
     )
     parser.add_argument(
         "--train_label_scheme",
@@ -92,12 +135,6 @@ def get_parser():
         help="Evaluate with or wthout joints whose geometry contains holes."
     )
     parser.add_argument(
-        "--threshold",
-        type=float,
-        default=2.6E-06,
-        help="Threshold to use for accuracy and IoU calculation."
-    )
-    parser.add_argument(
         "--loss",
         type=str,
         choices=("bce", "mle", "focal", "symmetric"),
@@ -105,17 +142,10 @@ def get_parser():
         help="Loss to use."
     )
     parser.add_argument(
-        "--reduction",
-        type=str,
-        choices=("sum", "mean"),
-        default="mean",
-        help="Loss reduction to use."
-    )
-    parser.add_argument(
-        "--pos_weight",
+        "--label_smoothing",
         type=float,
-        default=200.0,
-        help="Positive class weight for BCE loss."
+        default=0.0,
+        help="Label smoothing factor."
     )
     parser.add_argument(
         "--gamma",
@@ -128,46 +158,6 @@ def get_parser():
         type=float,
         default=0.25,
         help="Alpha parameter in focal loss is the weight assigned to rare classes."
-    )
-    parser.add_argument(
-        "--input_features",
-        type=str,
-        default="entity_types,length,area",
-        help="Input features to use as a string separated by commas.\
-                Can include: points, normals, tangents, trimming_mask,\
-                axis_pos, axis_dir, bounding_box, entity_types\
-                area, circumference, param_1, param_2\
-                length, radius, start_point, middle_point, end_point"
-    )
-    parser.add_argument(
-        "--without_synthetic",
-        action="store_true",
-        default=False,
-        help="Skip synthetic joints."
-    )
-    parser.add_argument(
-        "--feature_embedding",
-        action="store_true",
-        default=False,
-        help="Using feature quantization and embedding."
-    )
-    parser.add_argument(
-        "--num_bits",
-        type=int,
-        default=8,
-        help="Number of bit of quantization."
-    )
-    parser.add_argument(
-        "--label_smoothing",
-        type=float,
-        default=0.0,
-        help="Label smoothing factor."
-    )
-    parser.add_argument(
-        "--type_head",
-        action="store_true",
-        default=False,
-        help="Using type head."
     )
     return parser
 

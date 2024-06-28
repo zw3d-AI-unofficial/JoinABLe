@@ -130,10 +130,10 @@ class JointGraphDataset(JointBaseDataset):
         skip_far=False,
         skip_interference=False,
         skip_nurbs=False,
+        skip_synthetic=False,
         joint_type="all",
-        without_synthetic=False,
-        feature_embedding=False,
-        num_bits=9
+        quantize=False,
+        n_bits=9
     ):
         """
         Load the Fusion 360 Gallery joints dataset from graph data
@@ -169,10 +169,10 @@ class JointGraphDataset(JointBaseDataset):
         self.skip_far = skip_far
         self.skip_interference = skip_interference
         self.skip_nurbs = skip_nurbs
+        self.skip_synthetic = skip_synthetic
         self.joint_type = joint_type
-        self.without_synthetic = without_synthetic
-        self.feature_embedding = feature_embedding
-        self.num_bits = num_bits
+        self.quantize = quantize
+        self.n_bits = n_bits
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -311,14 +311,14 @@ class JointGraphDataset(JointBaseDataset):
                 graph1.bounding_box[:, 3:6] = self.rotate(graph1.bounding_box[:, 3:6], rotation1)
                 graph2.bounding_box[:, 3:6] = self.rotate(graph2.bounding_box[:, 3:6], rotation2)
         
-        # Using feature quantization and embedding if needed
-        if self.feature_embedding:
+        # Using feature quantization if needed
+        if self.quantize:
             for feature in ("axis_pos", "axis_dir", "bounding_box"):
                 if feature in self.entity_input_features:
                     graph1[feature], graph2[feature] = self.quantile_quantization(
                         graph1[feature], 
                         graph2[feature], 
-                        n_bits=self.num_bits
+                        n_bits=self.n_bits
                     )
             
             face_indices1 = torch.where(graph1.is_face > 0.5)[0].long()
@@ -330,7 +330,7 @@ class JointGraphDataset(JointBaseDataset):
                         graph2[feature], 
                         graph1_indices=face_indices1,
                         graph2_indices=face_indices2,
-                        n_bits=self.num_bits
+                        n_bits=self.n_bits
                     )
             
             edge_indices1 = torch.where(graph1["is_face"] <= 0.5)[0].long()
@@ -342,7 +342,7 @@ class JointGraphDataset(JointBaseDataset):
                         graph2[feature], 
                         graph1_indices=edge_indices1,
                         graph2_indices=edge_indices2,
-                        n_bits=self.num_bits
+                        n_bits=self.n_bits
                     )
         
         return [graph1, graph2, joint_graph]
@@ -1006,7 +1006,7 @@ class JointGraphDataset(JointBaseDataset):
         joint_type_matrix = torch.zeros((entity_count1, entity_count2), dtype=torch.long)
         for i, joint in enumerate(joints):  
             # Check synthetic
-            if self.without_synthetic:
+            if self.skip_synthetic:
                 if "is_synthetic" in joint and joint["is_synthetic"]:
                     continue
             entity1 = joint["geometry_or_origin_one"]["entity_one"]
@@ -1526,7 +1526,7 @@ class JointGraphBatchDataLoader:
             curr_node_count = g1.num_nodes + g2.num_nodes
             node_count += curr_node_count
             # TODO(pradeep): check if it's ok to not insert the data into the
-            # batch if it exceeds the max. node count. This may lead to skipping some of the data.
+            # batch if it exceeds the max node count. This may lead to skipping some of the data.
             # But maybe randomization will take care of covering all data in the dataset.
             if node_count > self.max_nodes_per_batch and len(batch) > 0:
                 batched_graphs = self._make_batch_from_data_list(batch)

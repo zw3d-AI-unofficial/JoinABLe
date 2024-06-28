@@ -21,7 +21,7 @@ def get_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="data",
+        default="data/zw3d-joinable-dataset",
         help="Dataset path."
     )
     parser.add_argument(
@@ -39,14 +39,8 @@ def get_parser():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=2,
+        default=8,
         help="Number of samples in a batch."
-    )
-    parser.add_argument(
-        "--batch_norm",
-        type=bool,
-        default=True,
-        help="Whether to use BatchNorm."
     )
     parser.add_argument(
         "--test_split",
@@ -101,7 +95,7 @@ def get_parser():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=0,
+        default=16,
         help="Number of workers to use in the torch dataloader."
     )
     parser.add_argument(
@@ -139,6 +133,12 @@ def get_parser():
         action="store_true",
         default=False,
         help="Skip true label with nurbs curve or surface as entity."
+    )
+    parser.add_argument(
+        "--skip_synthetic",
+        action="store_true",
+        default=False,
+        help="Skip synthetic joints."
     )
     parser.add_argument(
         "--joint_type",

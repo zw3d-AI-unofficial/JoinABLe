@@ -1,34 +1,21 @@
-from datasets.joint_graph_dataset import JointGraphDataset
+import math
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATv2Conv, GATConv
+
+from torch_geometric.nn import GATv2Conv
 from torchvision.ops.focal_loss import sigmoid_focal_loss
 
 from utils import metrics
+from datasets.joint_graph_dataset import JointGraphDataset
 
 
-def mlp(inp_dim, hidden_dim, out_dim, num_layers=1, batch_norm=False):
+def cnn2d(inp_channels, hidden_channels, out_dim, num_layers=1):
     assert num_layers >= 1
     modules = []
     for i in range(num_layers - 1):
-        modules.append(nn.Linear(inp_dim if i == 0 else hidden_dim, hidden_dim, bias=not batch_norm))
-        if batch_norm:
-            modules.append(nn.BatchNorm1d(hidden_dim))
-        modules.append(nn.ELU())
-    modules.append(nn.Linear(hidden_dim, out_dim, bias=True))
-    return nn.Sequential(*modules)
-
-
-def cnn2d(inp_channels, hidden_channels, out_dim, num_layers=1, batch_norm=False):
-    assert num_layers >= 1
-    modules = []
-    for i in range(num_layers - 1):
-        modules.append(nn.Conv2d(inp_channels if i == 0 else hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=not batch_norm))
-        if batch_norm:
-            modules.append(nn.BatchNorm2d(hidden_channels))
+        modules.append(nn.Conv2d(inp_channels if i == 0 else hidden_channels, hidden_channels, kernel_size=3, padding=1))
         modules.append(nn.ELU())
     modules.append(nn.AdaptiveAvgPool2d(1))
     modules.append(nn.Flatten())
@@ -36,13 +23,11 @@ def cnn2d(inp_channels, hidden_channels, out_dim, num_layers=1, batch_norm=False
     return nn.Sequential(*modules)
 
 
-def cnn1d(inp_channels, hidden_channels, out_dim, num_layers=1, batch_norm=False):
+def cnn1d(inp_channels, hidden_channels, out_dim, num_layers=1):
     assert num_layers >= 1
     modules = []
     for i in range(num_layers - 1):
-        modules.append(nn.Conv1d(inp_channels if i == 0 else hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=not batch_norm))
-        if batch_norm:
-            modules.append(nn.BatchNorm1d(hidden_channels))
+        modules.append(nn.Conv1d(inp_channels if i == 0 else hidden_channels, hidden_channels, kernel_size=3, padding=1))
         modules.append(nn.ELU())
     modules.append(nn.AdaptiveAvgPool1d(1))
     modules.append(nn.Flatten())
@@ -50,178 +35,72 @@ def cnn1d(inp_channels, hidden_channels, out_dim, num_layers=1, batch_norm=False
     return nn.Sequential(*modules)
 
 
-class EdgeDotProductMPN(nn.Module):
-    """
-    Performs message passing in the joint graph (connecting the two bodies)
-    to predict edge logits by a dot product
-    """
-    def __init__(self):
+class MLP(nn.Module):
+
+    def __init__(self, args):
         super().__init__()
+        self.c_fc    = nn.Linear(args.n_embd, 4 * args.n_embd, bias=args.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * args.n_embd, args.n_embd, bias=args.bias)
+        self.dropout = nn.Dropout(args.dropout)
 
-    def forward(self, x, edge_index):
-        src, dst = edge_index[0], edge_index[1]
-        x_src = x[src, :]
-        x_dst = x[dst, :]
-        return (x_src * x_dst).sum(-1)
-
-
-class EdgeMLPMPN(nn.Module):
-    """
-    Performs message passing in the joint graph (connecting the two bodies)
-    to predict edge logits by using an MLP (1x1 convolutions)
-    """
-    def __init__(self, in_channels, hidden_channels, out_channels=1, batch_norm=False):
-        super().__init__()
-        layers = []
-        layers.append(nn.Linear(2 * in_channels, hidden_channels))
-        if batch_norm:
-            layers.append(nn.BatchNorm1d(hidden_channels))
-        layers.append(nn.ELU())
-        layers.append(nn.Linear(hidden_channels, hidden_channels))
-        if batch_norm:
-            layers.append(nn.BatchNorm1d(hidden_channels))
-        layers.append(nn.ELU())
-        layers.append(nn.Linear(hidden_channels, out_channels))
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x, edge_index, squeeze=True):
-        src, tgt = edge_index[0].long(), edge_index[1].long()
-        x_src = x[src, :]
-        x_dst = x[tgt, :]
-        x = torch.cat([x_src, x_dst], dim=1)
-        x = self.net(x)
-        if squeeze:
-            return x.squeeze()
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
         return x
 
 
-def prepare_features_for_joint_graph(x1, x2, jg):
-    joint_graph_unbatched = jg.to_data_list()
-    num_nodes_graph1 = [item.num_nodes_graph1 for item in joint_graph_unbatched]
-    num_nodes_graph2 = [item.num_nodes_graph2 for item in joint_graph_unbatched]
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
-    start1 = 0
-    start2 = 0
-    concat_x = []
-    for i in range(len(joint_graph_unbatched)):
-        size1_i = num_nodes_graph1[i]
-        size2_i = num_nodes_graph2[i]
-        end1 = start1 + size1_i
-        end2 = start2 + size2_i
-        # Concatenate features from graph1 and graph2 in a interleaved fashion
-        # as this is the format that the joint graph expects
-        x1_i = x1[start1:end1]
-        x2_i = x2[start2:end2]
-        concat_x.append(x1_i)
-        concat_x.append(x2_i)
-        start1 = end1
-        start2 = end2
-    return torch.cat(concat_x, dim=0)
+    def __init__(self, n_dim, bias=None):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(n_dim))
+        self.bias = nn.Parameter(torch.zeros(n_dim)) if bias else None
 
-
-class PostJointNet(nn.Module):
-    def __init__(self, hidden_dim, dropout=0.0, reduction="sum", method="mlp", batch_norm=False, type_head=False):
-        super(PostJointNet, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.reduction = reduction
-        if self.reduction is None:
-            self.reduction = "sum"
-        self.method = method
-        if method not in ("mm", "mlp"):
-            raise NotImplemented("Expected 'method' to be 'mm' or 'mlp'")
-        self.dropout = nn.Dropout(dropout)
-        self.type_head = type_head
-
-        if self.method == "mm":
-            self.mpn = EdgeDotProductMPN()
-        elif self.method == "mlp":
-            self.mpn = EdgeMLPMPN(hidden_dim, hidden_dim, batch_norm=batch_norm)
-
-        if self.type_head:
-            self.type_mlp = EdgeMLPMPN(hidden_dim, hidden_dim, out_channels=len(JointGraphDataset.joint_type_map), batch_norm=batch_norm)
-
-        # for m in self.modules():
-        #     if isinstance(m, (nn.Linear, nn.Conv2d)):
-        #         torch.nn.init.xavier_uniform_(m.weight)
-        #         try:
-        #             m.bias.data.fill_(0.00)
-        #         except Exception as ex:
-        #             pass
-
-    def forward(self, x1, x2, jg):
-        x1 = self.dropout(x1)
-        x2 = self.dropout(x2)
-        x = prepare_features_for_joint_graph(x1, x2, jg)
-        logits = self.mpn(x, jg.edge_index)
-        if self.type_head:
-            edge_index = [torch.tensor([]).to(x.device), torch.tensor([]).to(x.device)]
-            for item in jg.to_data_list():
-                index = torch.where(item.edge_attr == 1)[0]
-                edge_index[0] = torch.concat((edge_index[0], (index // item.num_nodes_graph1)))
-                edge_index[1] = torch.concat((edge_index[1], torch.remainder(index, item.num_nodes_graph1)))
-            type_logits = self.type_mlp(x, edge_index, squeeze=False)
-            return [logits, type_logits]
-        return logits
-
-
-def _get_edge_node_indices(g):
-    """Get the indices of graph nodes corresponding to B-rep edges"""
-    edge_indices = torch.where(g["is_face"] <= 0.5)[0].long()
-    return edge_indices
-
-
-def _get_face_node_indices(g):
-    """Get the indices of graph nodes corresponding to B-rep faces"""
-    face_indices = torch.where(g["is_face"] > 0.5)[0].long()
-    return face_indices
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
 class FaceEmbedding(nn.Module):
-    def __init__(
-        self,
-        hidden_dim,
-        input_features,
-        batch_norm=False,
-        method="mlp",
-        feature_embedding=False,
-        num_bits=9
-    ):
-        super(FaceEmbedding, self).__init__()
-        assert method in ("mlp", "cnn")
-        self.hidden_dim = hidden_dim
-        self.method = method
+    def __init__(self, args):
+        super().__init__()
         # Turn the comma separated string e.g. "points,entity_types,is_face,length"
         # into lists for each feature type, i.e.
         # - Features used in the UV grid, i.e. points, normals, trimming_mask
         # - Features related to each B-Rep entity e.g. area, length
-        feat_lists = JointGraphDataset.parse_input_features_arg(input_features, input_feature_type="face")
+        feat_lists = JointGraphDataset.parse_input_features_arg(args.input_features, input_feature_type="face")
         _, self.grid_input_features, self.ent_input_features = feat_lists
         # Calculate the total size of each feature list
         self.grid_feat_size = JointGraphDataset.get_input_feature_size(self.grid_input_features, input_feature_type="face")
         self.ent_feat_size = JointGraphDataset.get_input_feature_size(self.ent_input_features, input_feature_type="face")
 
         # Setup the layers
+        n_vocab = int(2**args.n_bits)
+        n_embd = args.n_embd
+        self.n_embd = n_embd
         if self.grid_feat_size > 0:
-            if method == "mlp":
-                self.model_pre_grid = mlp(self.grid_feat_size, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
-            else:
-                channels = self.grid_feat_size // JointGraphDataset.grid_len
-                self.model_pre_grid = cnn2d(channels, hidden_dim, hidden_dim, num_layers=3, batch_norm=batch_norm)
+            channels = self.grid_feat_size // JointGraphDataset.grid_len
+            self.grid_embd = cnn2d(channels, n_embd, n_embd, num_layers=3)
         if self.ent_feat_size > 0:
-            self.feature_embedding = feature_embedding
-            if feature_embedding:
-                self.model_pre_ent = nn.ModuleDict({
-                    'entity_types': nn.Embedding(len(JointGraphDataset.surface_type_map), hidden_dim),
-                    'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                    'area': nn.Embedding(int(2**num_bits), hidden_dim),
-                    'circumference': nn.Embedding(int(2**num_bits), hidden_dim),
-                    'param_1': nn.Embedding(int(2**num_bits), hidden_dim),
-                    'param_2': nn.Embedding(int(2**num_bits), hidden_dim)
+            self.quantize = args.quantize
+            if args.quantize:
+                self.ent_embd = nn.ModuleDict({
+                    'entity_types': nn.Embedding(len(JointGraphDataset.surface_type_map), n_embd),
+                    'axis_pos': nn.Embedding(n_vocab, n_embd // 3),
+                    'axis_dir': nn.Embedding(n_vocab, n_embd // 3),
+                    'bounding_box': nn.Embedding(n_vocab, n_embd // 6),
+                    'area': nn.Embedding(n_vocab, n_embd),
+                    'circumference': nn.Embedding(n_vocab, n_embd),
+                    'param_1': nn.Embedding(n_vocab, n_embd),
+                    'param_2': nn.Embedding(n_vocab, n_embd)
                 })
             else:
-                self.model_pre_ent = mlp(self.ent_feat_size, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
+                self.ent_embd = nn.Linear(self.ent_feat_size, n_embd)
+        self.ln = LayerNorm(n_embd, bias=args.bias)
+        self.mlp = MLP(args)
 
     def get_entity_features(self, g, indices):
         """Get the entity features that were requested"""
@@ -248,32 +127,33 @@ class FaceEmbedding(nn.Module):
             grid_list.append(g.x[:, :, :, 6:])
 
         grid = torch.cat(grid_list, dim=-1)
-        if self.method == "mlp":
-            # If we have an MLP, then flatten the grid features
-            grid = grid.view(g.num_nodes, -1)
-        elif self.method == "cnn":
-            # If we have an CNN, then bring the channels into the 2nd dimension
-            grid = grid.permute(0, 3, 1, 2)
+        grid = grid.permute(0, 3, 1, 2)
         return grid
 
     def forward_one_graph(self, g):
+        def _get_face_node_indices(g):
+            """Get the indices of graph nodes corresponding to B-rep faces"""
+            face_indices = torch.where(g["is_face"] > 0.5)[0].long()
+            return face_indices
+
         face_node_indices = _get_face_node_indices(g)
         device = g.edge_index.device
-        x = torch.zeros(g.num_nodes, self.hidden_dim, dtype=torch.float, device=device)
+        x = torch.zeros(g.num_nodes, self.n_embd, dtype=torch.float, device=device)
 
         if self.grid_feat_size > 0:
             grid = self.get_grid_features(g)
             grid_faces = grid[face_node_indices, :]
-            x[face_node_indices, :] += self.model_pre_grid(grid_faces)
+            x[face_node_indices, :] += self.grid_embd(grid_faces)
         if self.ent_feat_size > 0:
-            if self.feature_embedding:
+            if self.quantize:
                 for key in self.ent_input_features:
-                    if key in self.model_pre_ent:
-                        embedding = self.model_pre_ent[key](g[key][face_node_indices])
+                    if key in self.ent_embd:
+                        embedding = self.ent_embd[key](g[key][face_node_indices])
                         x[face_node_indices, :] += embedding.reshape(embedding.shape[0], -1)
             else:
                 ent_faces = self.get_entity_features(g, face_node_indices)
-                x[face_node_indices, :] += self.model_pre_ent(ent_faces)
+                x[face_node_indices, :] += self.ent_embd(ent_faces)
+        x = x + self.mlp(self.ln(x))
         return x
 
     def forward(self, g1, g2):
@@ -283,54 +163,43 @@ class FaceEmbedding(nn.Module):
 
 
 class EdgeEmbedding(nn.Module):
-    def __init__(
-        self,
-        hidden_dim,
-        input_features,
-        batch_norm=False,
-        method="mlp",
-        feature_embedding=False,
-        num_bits=9
-    ):
-        super(EdgeEmbedding, self).__init__()
-        self.hidden_dim = hidden_dim
-        assert method in ("mlp", "cnn")
-        self.method = method
+    def __init__(self, args):
+        super().__init__()
         # Turn the comma separated string e.g. "points,entity_types,is_face,length"
         # into lists for each feature type, i.e.
         # - Features used in the UV grid, i.e. points, normals, trimming_mask
         # - Features related to each B-Rep entity e.g. area, length
-        feat_lists = JointGraphDataset.parse_input_features_arg(input_features, input_feature_type="edge")
+        feat_lists = JointGraphDataset.parse_input_features_arg(args.input_features, input_feature_type="edge")
         _, self.grid_input_features, self.entity_input_features = feat_lists
         # Calculate the total size of each feature list
         self.grid_feat_size = JointGraphDataset.get_input_feature_size(self.grid_input_features, input_feature_type="edge")
         self.ent_feat_size = JointGraphDataset.get_input_feature_size(self.entity_input_features, input_feature_type="edge")
 
         # Setup the layers
+        n_vocab = int(2**args.n_bits)
+        n_embd = args.n_embd
+        self.n_embd = n_embd
         if self.grid_feat_size > 0:
-            if self.method == "mlp":
-                self.model_pre_grid = mlp(self.grid_feat_size, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
-            else:
-                channels = self.grid_feat_size // JointGraphDataset.grid_size
-                self.model_pre_grid = cnn1d(channels, hidden_dim, hidden_dim, num_layers=3, batch_norm=batch_norm)
+            channels = self.grid_feat_size // JointGraphDataset.grid_size
+            self.grid_embd = cnn1d(channels, n_embd, n_embd, num_layers=3)
         if self.ent_feat_size > 0:
-            self.feature_embedding = feature_embedding
-            if self.feature_embedding:
-                self.model_pre_ent = nn.ModuleDict({
-                    'entity_types': nn.Embedding(len(JointGraphDataset.curve_type_map), hidden_dim),
-                    'axis_pos': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'axis_dir': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'bounding_box': nn.Embedding(int(2**num_bits), hidden_dim // 6),
-                    'length': nn.Embedding(int(2**num_bits), hidden_dim),
-                    'radius': nn.Embedding(int(2**num_bits), hidden_dim),
-                    'start_point': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'middle_point': nn.Embedding(int(2**num_bits), hidden_dim // 3),
-                    'end_point': nn.Embedding(int(2**num_bits), hidden_dim // 3)
+            self.quantize = args.quantize
+            if self.quantize:
+                self.ent_embd = nn.ModuleDict({
+                    'entity_types': nn.Embedding(len(JointGraphDataset.curve_type_map), n_embd),
+                    'axis_pos': nn.Embedding(n_vocab, n_embd // 3),
+                    'axis_dir': nn.Embedding(n_vocab, n_embd // 3),
+                    'bounding_box': nn.Embedding(n_vocab, n_embd // 6),
+                    'length': nn.Embedding(n_vocab, n_embd),
+                    'radius': nn.Embedding(n_vocab, n_embd),
+                    'start_point': nn.Embedding(n_vocab, n_embd // 3),
+                    'middle_point': nn.Embedding(n_vocab, n_embd // 3),
+                    'end_point': nn.Embedding(n_vocab, n_embd // 3)
                 })
             else:
-                self.model_pre_ent = mlp(self.ent_feat_size, hidden_dim, hidden_dim, num_layers=2, batch_norm=batch_norm)
-        
-        
+                self.ent_embd = nn.Linear(self.ent_feat_size, n_embd)
+        self.ln = LayerNorm(n_embd, bias=args.bias)
+        self.mlp = MLP(args)
     
     def get_entity_features(self, g, indices):
         """Get the entity features that were requested"""
@@ -356,32 +225,32 @@ class EdgeEmbedding(nn.Module):
         if "tangents" in self.grid_input_features:
             grid_list.append(g.x[:, 0, :, 3:6])
         grid = torch.cat(grid_list, dim=-1)
-        if self.method == "mlp":
-            # If we have an MLP, then flatten the grid features
-            grid = grid.view(g.num_nodes, -1)
-        elif self.method == "cnn":
-            # If we have an CNN, then bring the channels into the 2nd dimension
-            grid = grid.permute(0, 2, 1)
+        grid = grid.permute(0, 2, 1)
         return grid
 
     def forward_one_graph(self, g):
+        def _get_edge_node_indices(g):
+            """Get the indices of graph nodes corresponding to B-rep edges"""
+            edge_indices = torch.where(g["is_face"] <= 0.5)[0].long()
+            return edge_indices
         edge_node_indices = _get_edge_node_indices(g)
         device = g.edge_index.device
-        x = torch.zeros(g.num_nodes, self.hidden_dim, dtype=torch.float, device=device)
+        x = torch.zeros(g.num_nodes, self.n_embd, dtype=torch.float, device=device)
 
         if self.grid_feat_size > 0:
             grid = self.get_grid_features(g)
             grid_edges = grid[edge_node_indices, :]
-            x[edge_node_indices, :] += self.model_pre_grid(grid_edges)
+            x[edge_node_indices, :] += self.grid_embd(grid_edges)
         if self.ent_feat_size > 0:
-            if self.feature_embedding:
+            if self.quantize:
                 for key in self.entity_input_features:
-                    if key in self.model_pre_ent:
-                        embedding = self.model_pre_ent[key](g[key][edge_node_indices])
+                    if key in self.ent_embd:
+                        embedding = self.ent_embd[key](g[key][edge_node_indices])
                         x[edge_node_indices, :] += embedding.reshape(embedding.shape[0], -1)
             else:
                 ent_edges = self.get_entity_features(g, edge_node_indices)
-                x[edge_node_indices, :] += self.model_pre_ent(ent_edges)
+                x[edge_node_indices, :] += self.ent_embd(ent_edges)
+        x = x + self.mlp(self.ln(x))
         return x    
 
     def forward(self, g1, g2):
@@ -390,118 +259,274 @@ class EdgeEmbedding(nn.Module):
         return x1, x2
 
 
-class GAT(torch.nn.Module):
-    def __init__(self, hidden_dim, dropout, mpn, batch_norm=False, layer_num=2):
-        super(GAT, self).__init__()
-        if mpn == "gat":
-            for layer in range(layer_num):
-                setattr(
-                    self,
-                    "conv" + str(layer),
-                    GATConv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-                )
-        elif mpn == "gatv2":
-            for layer in range(layer_num):
-                setattr(
-                    self,
-                    "conv" + str(layer + 1),
-                    GATv2Conv(hidden_dim, hidden_dim // 8, heads=8, dropout=dropout)
-                )
-        else:
-            raise Exception("Unknown mpn argument")
-        
-        self.batch_norm = batch_norm
-        if batch_norm:
-            self.bn = nn.BatchNorm1d(hidden_dim)
-        self.dropout = nn.Dropout(dropout)
-        self.layer_num = layer_num
+class GATBlock(nn.Module):
+    
+    def __init__(self, args):
+        super().__init__()
+        n_embd = args.n_embd
+        self.ln_1 = LayerNorm(n_embd, bias=args.bias)
+        self.attn = GATv2Conv(n_embd, n_embd // args.n_head, heads=args.n_head, dropout=args.dropout)
+        self.ln_2 = LayerNorm(n_embd, bias=args.bias)
+        self.mlp = MLP(args)
 
     def forward(self, x, edges_idx):
-        for layer in range(self.layer_num - 1):
-            x = self.dropout(x)
-            x = getattr(self, "conv" + str(layer + 1))(x, edges_idx)
-            if self.batch_norm:
-                x = self.bn(x)
-            x = F.elu(x)
-        x = self.dropout(x)
-        x = getattr(self, "conv" + str(self.layer_num))(x, edges_idx)
+        x = x + self.attn(self.ln_1(x), edges_idx)
+        x = x + self.mlp(self.ln_2(x))
         return x
+
+
+class SelfAttention(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        assert args.n_embd % args.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(args.n_embd, 3 * args.n_embd, bias=args.bias)
+        # output projection
+        self.c_proj = nn.Linear(args.n_embd, args.n_embd, bias=args.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(args.dropout)
+        self.resid_dropout = nn.Dropout(args.dropout)
+        self.n_head = args.n_head
+        self.n_embd = args.n_embd
+        self.dropout = args.dropout
+
+    def forward(self, x, attn_mask):
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # self-attention: 
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
+
+class SATBlock(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        self.ln_1 = LayerNorm(args.n_embd, bias=args.bias)
+        self.attn = SelfAttention(args)
+        self.ln_2 = LayerNorm(args.n_embd, bias=args.bias)
+        self.mlp = MLP(args)
+
+    def forward(self, x, attn_mask):
+        x = x + self.attn(self.ln_1(x), attn_mask)
+        x = x + self.mlp(self.ln_2(x))
+        return x
+    
+
+class CrossAttention(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        assert args.n_embd % args.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(args.n_embd, 3 * args.n_embd, bias=args.bias)
+        self.c_attn = nn.Linear(args.n_embd, 3 * args.n_embd, bias=args.bias)
+        # output projection
+        self.c_proj = nn.Linear(args.n_embd, args.n_embd, bias=args.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(args.dropout)
+        self.resid_dropout = nn.Dropout(args.dropout)
+        self.n_head = args.n_head
+        self.n_embd = args.n_embd
+        self.dropout = args.dropout
+
+    def forward(self, x1, x2, attn_mask):
+        B, T1, C = x1.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T2, C = x2.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q1, k1, v1  = self.c_attn(x1).split(self.n_embd, dim=2)
+        k1 = k1.view(B, T1, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T1, hs)
+        q1 = q1.view(B, T1, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T1, hs)
+        v1 = v1.view(B, T1, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T1, hs)
+        q2, k2, v2  = self.c_attn(x2).split(self.n_embd, dim=2)
+        k2 = k2.view(B, T2, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T2, hs)
+        q2 = q2.view(B, T2, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T2, hs)
+        v2 = v2.view(B, T2, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T2, hs)
+
+        # cross-attention: 
+        y1 = torch.nn.functional.scaled_dot_product_attention(q1, k2, v2, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0)
+        y1 = y1.transpose(1, 2).contiguous().view(B, T1, C) # re-assemble all head outputs side by side
+        y1 = self.resid_dropout(self.c_proj(y1))
+
+        attn_mask=attn_mask.transpose(2, 3)
+        y2 = torch.nn.functional.scaled_dot_product_attention(q2, k1, v1, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0)
+        y2 = y2.transpose(1, 2).contiguous().view(B, T2, C) # re-assemble all head outputs side by side
+        y2 = self.resid_dropout(self.c_proj(y2))
+        return y1, y2
+
+
+class CATBlock(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        self.ln_1 = LayerNorm(args.n_embd, bias=args.bias)
+        self.attn = CrossAttention(args)
+        self.ln_2 = LayerNorm(args.n_embd, bias=args.bias)
+        self.mlp = MLP(args)
+
+    def forward(self, x1, x2, attn_mask_cross):
+        x = self.attn(self.ln_1(x1), self.ln_1(x2), attn_mask_cross)
+        x1 = x1 + x[0]
+        x2 = x2 + x[1]
+        x1 = x1 + self.mlp(self.ln_2(x1))
+        x2 = x2 + self.mlp(self.ln_2(x2))
+        return x1, x2
+
+
+class MLPBlock(nn.Module):
+
+    def __init__(self, args):
+        super().__init__()
+        self.ln = LayerNorm(args.n_embd, bias=args.bias)
+        self.mlp = MLP(args)
+
+    def forward(self, x):
+        x = x + self.mlp(self.ln(x))
+        return x
+
+
+class JointPredictHead(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.block_list = nn.ModuleList([MLPBlock(args) for _ in range(args.n_layer_head1)])
+        self.ln = LayerNorm(args.n_embd, bias=args.bias)
+        self.out = nn.Linear(args.n_embd, 1, bias=args.bias)
+
+    def forward(self, x, jg):
+        src, tgt = jg.edge_index[0].long(), jg.edge_index[1].long()
+        x = x[src, :] + x[tgt, :]
+        for block in self.block_list:
+            x = block(x)
+        logits = self.out(self.ln(x)).squeeze()
+        return logits
+
+
+class JointTypeHead(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.block_list = nn.ModuleList([MLPBlock(args) for _ in range(args.n_layer_head2)])
+        self.ln = LayerNorm(args.n_embd, bias=args.bias)
+        self.out = nn.Linear(args.n_embd, len(JointGraphDataset.joint_type_map), bias=args.bias)
+
+    def forward(self, x, jg):
+        src, tgt = torch.tensor([]).to(x.device), torch.tensor([]).to(x.device)
+        for item in jg.to_data_list():
+            index = torch.where(item.edge_attr == 1)[0]
+            src = torch.concat((src, (index // item.num_nodes_graph1)))
+            tgt = torch.concat((tgt, torch.remainder(index, item.num_nodes_graph1)))
+        x = x[src, :] + x[tgt, :]
+        for block in self.block_list:
+            x = block(x)
+        logits = self.out(self.ln(x))
+        return logits
 
 
 class JoinABLe(nn.Module):
-    def __init__(
-        self,
-        hidden_dim,
-        input_features,
-        dropout=0.0,
-        mpn="gatv2",
-        batch_norm=False,
-        reduction="sum",
-        post_net="mlp",
-        pre_net="mlp",
-        mpn_layer_num=2,
-        feature_embedding=False,
-        num_bits=9,
-        type_head=False
-    ):
-        super(JoinABLe, self).__init__()
-        self.reduction = reduction
-        self.face_embedding = FaceEmbedding(
-            hidden_dim, 
-            input_features, 
-            batch_norm=batch_norm, 
-            method=pre_net, 
-            feature_embedding=feature_embedding, 
-            num_bits=num_bits
-        )
-        self.edge_embedding = EdgeEmbedding(
-            hidden_dim, 
-            input_features, 
-            batch_norm=batch_norm, 
-            method=pre_net,
-            feature_embedding=feature_embedding, 
-            num_bits=num_bits
-        )
-        # self.proj = nn.Linear(hidden_dim, hidden_dim)
-        self.mpn = GAT(hidden_dim, dropout, mpn, batch_norm=batch_norm, layer_num=mpn_layer_num)
-        self.post = PostJointNet(hidden_dim, dropout=dropout, reduction=reduction, method=post_net, batch_norm=batch_norm, type_head=type_head)
+    def __init__(self, args):
+        super().__init__()
+        self.face_embd = FaceEmbedding(args)
+        self.edge_embd = EdgeEmbedding(args)
+        self.drop = nn.Dropout(args.dropout)
+        self.gat_list = nn.ModuleList([GATBlock(args) for _ in range(args.n_layer_gat)])
+        self.sat_list = nn.ModuleList([SATBlock(args) for _ in range(args.n_layer_sat)])
+        self.cat_list = nn.ModuleList([CATBlock(args) for _ in range(args.n_layer_cat)])
+        self.head1 = JointPredictHead(args)
+        self.head2 = JointTypeHead(args)
+        self.with_type = args.with_type
 
-        self._initialize_weights()
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def split_and_pad(self, x, node_counts):
+        x_list = torch.split(x, node_counts)
+        max_nodes = max(node_counts)
+
+        padded_x_list = []
+        for x in x_list:
+            n_nodes = x.size(0)
+            padding = (0, 0, 0, max_nodes - n_nodes)
+            padded_x = F.pad(x, padding, value=0)
+            padded_x_list.append(padded_x)
+        return torch.stack(padded_x_list)
+
+    def get_attn_masks(self, x1, x2, n_nodes1, n_nodes2):
+        B, T1, _ = x1.shape
+        B, T2, _ = x2.shape
+        attn_mask1 = torch.ones((B, 1, T1, T1), dtype=torch.float32, device=x1.device)
+        attn_mask2 = torch.ones((B, 1, T2, T2), dtype=torch.float32, device=x1.device)
+        attn_mask_cross = torch.ones((B, 1, T1, T2), dtype=torch.float32, device=x1.device)
+        for i in range(B):
+            attn_mask1[i, 0, :n_nodes1[i], :n_nodes1[i]] = 0
+            attn_mask2[i, 0, :n_nodes2[i], :n_nodes2[i]] = 0
+            attn_mask_cross[i, 0, :n_nodes1[i], :n_nodes2[i]] = 0
+        A_SMALL_NUMBER = -1e9
+        attn_mask1 *= A_SMALL_NUMBER
+        attn_mask2 *= A_SMALL_NUMBER
+        attn_mask_cross *= A_SMALL_NUMBER
+        return attn_mask1, attn_mask2, attn_mask_cross
+
+    def unpad_and_concat(self, x1, x2, n_nodes1, n_nodes2):
+        concat_x = []
+        for i in range(len(n_nodes1)):
+            size1_i = n_nodes1[i]
+            size2_i = n_nodes2[i]
+            # Concatenate features from graph1 and graph2 in a interleaved fashion
+            # as this is the format that the joint graph expects
+            x1_i = x1[i, :size1_i, :]
+            x2_i = x2[i, :size2_i, :]
+            concat_x.append(x1_i)
+            concat_x.append(x2_i)
+        x = torch.cat(concat_x, dim=0)
+        return x
     
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Embedding):
-                nn.init.normal_(m.weight, mean=0, std=1)
-            elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, GATConv):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
     def forward(self, g1, g2, jg):
         # Compute the features for the is_face nodes, and set the rest to zero
-        x1_face, x2_face = self.face_embedding(g1, g2)
+        x1_face, x2_face = self.face_embd(g1, g2)
         # Compute the features for the NOT is_face nodes, and set the rest to zero
-        x1_edge, x2_edge = self.edge_embedding(g1, g2)
+        x1_edge, x2_edge = self.edge_embd(g1, g2)
         # Sum the two features to populate the edge and face features at the right locations
-        x1 = x1_edge + x1_face
-        x2 = x2_edge + x2_face
-        # Projection to common space
-        # x1 = self.proj(x1)
-        # x2 = self.proj(x2)
+        x1 = self.drop(x1_edge + x1_face)
+        x2 = self.drop(x2_edge + x2_face)      
         # Message passing
-        x1 = self.mpn(x1, g1.edge_index)
-        x2 = self.mpn(x2, g2.edge_index)
+        for block in self.gat_list:
+            x1 = block(x1, g1.edge_index)
+            x2 = block(x2, g2.edge_index)
+        # Prepare data for attention layers
+        joint_graph_unbatched = jg.to_data_list()
+        n_nodes1 = [item.num_nodes_graph1 for item in joint_graph_unbatched]
+        n_nodes2 = [item.num_nodes_graph2 for item in joint_graph_unbatched]
+        x1 = self.split_and_pad(x1, n_nodes1)
+        x2 = self.split_and_pad(x2, n_nodes2)
+        # Attention layers
+        attn_mask1, attn_mask2, attn_mask_cross = self.get_attn_masks(x1, x2, n_nodes1, n_nodes2)
+        for block in self.sat_list:
+            x1 = block(x1, attn_mask1)
+            x2 = block(x2, attn_mask2)
+        for block in self.cat_list:
+            x1, x2 = block(x1, x2, attn_mask_cross)
         # Pass to post-net
-        x = self.post(x1, x2, jg)
-        return x
+        x = self.unpad_and_concat(x1, x2, n_nodes1, n_nodes2)
+        logits = self.head1(x, jg)
+        if self.with_type:
+            type_logits = self.head2(x, jg)
+            return logits, type_logits
+        return logits
 
     def soft_cross_entropy(self, input, target):
         logprobs = F.log_softmax(input, dim=-1)
@@ -526,7 +551,7 @@ class JoinABLe(nn.Module):
         loss_type = 0
         start = 0
 
-        if args.type_head:
+        if args.with_type:
             x, type_x = x
             loss_type = F.cross_entropy(type_x, joint_graph.joint_type_list)
 
@@ -540,7 +565,10 @@ class JoinABLe(nn.Module):
                 labels_i = label_smoothing(labels_i, args.label_smoothing)
             # Classification loss
             if args.loss == "bce":
-                loss_clf += self.bce_loss(x_i, labels_i, pos_weight=args.pos_weight)
+                num_total = np.prod(list(joint_graph_unbatched[i].edge_attr.shape))
+                num_pos = torch.sum(joint_graph_unbatched[i].edge_attr)
+                pos_weight = (num_total - num_pos) // num_pos
+                loss_clf += self.bce_loss(x_i, labels_i, pos_weight=pos_weight)
             elif args.loss == "mle":
                 loss_clf += self.mle_loss(x_i, labels_i)
             elif args.loss == "focal":
@@ -551,11 +579,7 @@ class JoinABLe(nn.Module):
 
         # Total loss
         loss = loss_clf + loss_sym + loss_type
-        if self.reduction == "mean":
-            loss = loss / float(batch_size)
-        else:
-            # Do nothing: Loss is already reduced by sum
-            pass
+        loss = loss / float(batch_size)
         return loss
 
     def mle_loss(self, x, labels):
