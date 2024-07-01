@@ -1,29 +1,27 @@
 ### train
-python train.py --exp_name test_00
-python train.py --exp_name test_01_bce_eqv --loss bce --train_label_scheme Joint,JointEquivalent
-python train.py --exp_name test_02_smooth --label_smoothing 0.1
-python train.py --exp_name test_03_type --with_type
+# python train.py --exp_name 00_baseline
+python train.py --exp_name 01_quantize --quantize
+python train.py --exp_name 02_less_gat --n_layer_gat 1
+python train.py --exp_name 03_less_sat --n_layer_sat 1
+python train.py --exp_name 04_less_cat --n_layer_cat 1
+python train.py --exp_name 05_no_head1 --n_layer_head1 0
+python train.py --exp_name 06_with_type --with_type
+python train.py --exp_name 07_less_head --n_head 4
+python train.py --exp_name 08_less_embd --n_embd 192
+python train.py --exp_name 09_dropout --dropout 0.2
+python train.py --exp_name 10_with_bias --bias
+python train.py --exp_name 11_more_lr --lr 0.001
+python train.py --exp_name 12_equivalent --train_label_scheme Joint,JointEquivalent
+python train.py --exp_name 13_bce --loss bce
+python train.py --exp_name 14_loss_sym --loss_sym
+python train.py --exp_name 15_bce_equ --loss bce --train_label_scheme Joint,JointEquivalent
+python train.py --exp_name 16_label_smoothing --label_smoothing 0.1
+python train.py --exp_name 17_rotate  --random_rotate
 
-# python train.py --exp_name test_02 --loss bce
-# python train.py --exp_name test_03 --loss symmetric
-# python train.py --exp_name test_04 --loss focal
-# python train.py --exp_name test_06 --train_label_scheme Joint,JointEquivalent
-# python train.py --exp_name test_08 --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --random_rotate
-# python train.py --exp_name test_10 --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --loss symmetric --train_label_scheme Joint,JointEquivalent
-# python train.py --exp_name test_12 --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --feature_embedding --label_smoothing 0.1
-# python train.py --exp_name test_13  --delete_cache --skip_far
-# python train.py --exp_name test_14  --delete_cache --skip_interference
-# python train.py --exp_name test_15  --delete_cache --skip_nurbs
-# python train.py --exp_name test_16  --delete_cache --skip_synthetic
-# python train.py --exp_name test_17  --delete_cache --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --joint_type Coincident
-# python train.py --exp_name test_18  --delete_cache --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --joint_type Concentric
-# python train.py --exp_name test_19 --input_features axis_dir,entity_types,area,circumference,param_1,param_2,length,radius,start_point,middle_point,end_point
-# python train.py --exp_name test_20 --input_features axis_dir,entity_types,area,circumference,param_1,param_2,length,radius,start_point,middle_point,end_point --label_smoothing 0.1
-# python train.py --exp_name test_21 --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --feature_embedding --train_label_scheme Joint,JointEquivalent
-# python train.py --exp_name test_22  --delete_cache --skip_interference --input_features axis_pos,axis_dir,entity_types,area,circumference,param_1,param_2,length,radius --label_smoothing 0.1
-# python train.py --exp_name test_23 --input_features points,normals,tangents,trimming_mask --label_smoothing 0.1
-# python train.py --exp_name test_24 --input_features points,normals,tangents,trimming_mask --label_smoothing 0.1 --random_rotate
-# python train.py --exp_name test_26 --input_features entity_types,area,length,points,normals,tangents,trimming_mask --label_smoothing 0.1
+# python train.py --exp_name 28  --delete_cache --skip_far
+# python train.py --exp_name 29  --delete_cache --skip_interference
+# python train.py --exp_name 20  --delete_cache --skip_nurbs
+# python train.py --exp_name 21  --delete_cache --skip_synthetic
 
 ### test (random)
 # python train.py --traintest randomtest --dataset data/zw3d-joinable-dataset  --exp_dir pretrained --exp_name paper --checkpoint last_run_0

@@ -42,13 +42,13 @@ def get_parser():
         "--n_layer_sat",
         type=int,
         default=2,
-        help="Number of Self-Attantion layers."
+        help="Number of Self-Attention layers."
     )
     parser.add_argument(
         "--n_layer_cat",
         type=int,
         default=2,
-        help="Number of Cross-Attantion layers."
+        help="Number of Cross-Attention layers."
     )
     parser.add_argument(
         "--n_layer_head1",
@@ -72,7 +72,7 @@ def get_parser():
         "--n_head",
         type=int,
         default=8,
-        help="Number of attantion heads."
+        help="Number of attention heads."
     )
     parser.add_argument(
         "--n_embd",
@@ -137,9 +137,15 @@ def get_parser():
     parser.add_argument(
         "--loss",
         type=str,
-        choices=("bce", "mle", "focal", "symmetric"),
+        choices=("bce", "mle", "focal"),
         default="mle",
         help="Loss to use."
+    )
+    parser.add_argument(
+        "--loss_sym",
+        action="store_true",
+        default=False,
+        help="Use symmetric loss."
     )
     parser.add_argument(
         "--label_smoothing",
@@ -158,6 +164,12 @@ def get_parser():
         type=float,
         default=0.25,
         help="Alpha parameter in focal loss is the weight assigned to rare classes."
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Change wandb to offline mode."
     )
     return parser
 

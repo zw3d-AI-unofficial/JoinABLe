@@ -421,12 +421,9 @@ class JointTypeHead(nn.Module):
         self.out = nn.Linear(args.n_embd, len(JointGraphDataset.joint_type_map), bias=args.bias)
 
     def forward(self, x, jg):
-        src, tgt = torch.tensor([]).to(x.device), torch.tensor([]).to(x.device)
-        for item in jg.to_data_list():
-            index = torch.where(item.edge_attr == 1)[0]
-            src = torch.concat((src, (index // item.num_nodes_graph1)))
-            tgt = torch.concat((tgt, torch.remainder(index, item.num_nodes_graph1)))
-        x = x[src, :] + x[tgt, :]
+        ids = torch.where(jg.edge_attr == 1)[0].long()
+        src, tgt = jg.edge_index[0].long(), jg.edge_index[1].long()
+        x = x[src[ids], :] + x[tgt[ids], :]
         for block in self.block_list:
             x = block(x)
         logits = self.out(self.ln(x))
@@ -574,7 +571,8 @@ class JoinABLe(nn.Module):
             elif args.loss == "focal":
                 loss_clf += self.focal_loss(x_i, labels_i)
             # Symmetric loss
-            loss_sym += self.symmetric_loss(x_i, labels_i, num_nodes_graph1[i], num_nodes_graph2[i])
+            if args.loss_sym:
+                loss_sym += self.symmetric_loss(x_i, labels_i, num_nodes_graph1[i], num_nodes_graph2[i])
             start = end
 
         # Total loss

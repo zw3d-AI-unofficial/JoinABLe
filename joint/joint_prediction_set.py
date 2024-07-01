@@ -139,7 +139,7 @@ class JointPredictionSet(JointSet):
         """
         # g1 and g2 are the B-Rep bodies represented as graphs with learning features
         # label_matrix has the user-selected joints
-        label_matrix = joint_graph.edge_attr.view(joint_graph.num_nodes_graph1, joint_graph.num_nodes_graph2)
+        label_matrix = joint_graph.edge_attr.view(g1.num_nodes, g2.num_nodes)
         preds = JointPredictionSet.get_network_predictions(g1, g2, joint_graph, model)
 
         # The graph files that we use to reference the original

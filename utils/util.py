@@ -170,12 +170,11 @@ def get_loggers(args, log_dir):
         log_dir,
         name="log"
     )
-    # return [csv_logger]
     wandb_logger = pl.loggers.WandbLogger(
         project="joinable_gpt", 
         entity="fusiqiao101", 
         name=args.exp_name, 
-        # mode="offline"
+        offline=args.offline
     )
     loggers = [csv_logger, wandb_logger]
     return loggers

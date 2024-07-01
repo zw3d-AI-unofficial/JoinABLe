@@ -126,12 +126,12 @@ class JointGraphDataset(JointBaseDataset):
         center_and_scale=True,
         max_node_count=0,
         label_scheme=None,
-        input_features="entity_types,length,face_reversed,edge_reversed",
+        input_features="entity_types,area,length,points,normals,tangents,trimming_mask",
+        joint_type="all",
         skip_far=False,
         skip_interference=False,
         skip_nurbs=False,
         skip_synthetic=False,
-        joint_type="all",
         quantize=False,
         n_bits=9
     ):
@@ -1494,12 +1494,10 @@ class JointGraphBatchDataLoader:
     """
     def __init__(self, dataset, max_nodes_per_batch, shuffle=True, drop_last=True):
         self.dataset = dataset
-        if shuffle:
-            self.sampler = torch.utils.data.RandomSampler(dataset)
-        else:
-            self.sampler = torch.utils.data.SequentialSampler(dataset)
+        self.lengths = [d[2].num_nodes for d in dataset]
         self.max_nodes_per_batch = max_nodes_per_batch
         self.drop_last = drop_last
+        self.shuffle = shuffle
 
     def _make_batch_from_data_list(self, batch_list):
         """
@@ -1518,22 +1516,25 @@ class JointGraphBatchDataLoader:
 
     def __iter__(self):
         batch = []
+        batches = []
         node_count = 0
-        for idx in self.sampler:
-            g1, g2, jg = self.dataset[idx]
-            if g1.num_nodes + g2.num_nodes > self.max_nodes_per_batch:
-                continue
-            curr_node_count = g1.num_nodes + g2.num_nodes
-            node_count += curr_node_count
-            # TODO(pradeep): check if it's ok to not insert the data into the
-            # batch if it exceeds the max node count. This may lead to skipping some of the data.
-            # But maybe randomization will take care of covering all data in the dataset.
-            if node_count > self.max_nodes_per_batch and len(batch) > 0:
-                batched_graphs = self._make_batch_from_data_list(batch)
-                yield batched_graphs
+        ids = np.argsort(self.lengths, kind='mergesort')
+        for id in ids:
+            curr_node_count = self.dataset[id][2].num_nodes
+            if node_count + curr_node_count > self.max_nodes_per_batch:
+                batches.append(list(batch))
                 batch = []
                 node_count = 0
-            batch.append([g1, g2, jg])
+            batch.append(id)
+            node_count += curr_node_count
+            
         if node_count > 0 and not self.drop_last:
+            batches.append(list(batch))
+
+        if self.shuffle:
+            random.shuffle(batches)
+            
+        for batch in batches:
+            batch = [self.dataset[id] for id in batch]
             batched_graphs = self._make_batch_from_data_list(batch)
             yield batched_graphs

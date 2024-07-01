@@ -68,15 +68,16 @@ class JointPrediction(pl.LightningModule):
 
         top_k = [0, 0, 0]
         start = 0
-        size_of_each_joint_graph = [np.prod(list(item.edge_attr.shape)) for item in joint_graph_unbatched]
-        for i in range(batch_size):
-            size_i = size_of_each_joint_graph[i]
+        for i, item in enumerate(joint_graph_unbatched):
+            n_nodes1 = graph_one_unbatched[i].num_nodes
+            n_nodes2 = graph_two_unbatched[i].num_nodes
+            size_i = n_nodes1 * n_nodes2
             end = start + size_i
             top_k_i = self.model.precision_at_top_k(
                 x[start: end], 
-                joint_graph_unbatched[i].edge_attr, 
-                graph_one_unbatched[i].num_nodes, 
-                graph_two_unbatched[i].num_nodes, 
+                item.edge_attr, 
+                n_nodes1, 
+                n_nodes2, 
                 k=[1,5,50]
             )
             for j in range(len(top_k)):
@@ -141,7 +142,7 @@ class JointPrediction(pl.LightningModule):
         # self.test_iou.update(prob, jg.edge_attr)
         # self.test_accuracy.update(prob, jg.edge_attr)
         # Calculate the precision at k with a default sequence of k
-        top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes)
+        top_k = self.model.precision_at_top_k(x, jg.edge_attr, jg.num_nodes_graph1, jg.num_nodes_graph2)
         self.log(f"eval_{split}_loss", loss, on_step=False, on_epoch=True, logger=True, batch_size=1)
         self.log(f"eval_{split}_top_1", top_k[0], on_step=False, on_epoch=True, logger=True, batch_size=1)
         self.log(f"eval_{split}_top_5", top_k[4], on_step=False, on_epoch=True, logger=True, batch_size=1)
@@ -356,7 +357,7 @@ def evaluate_once(args, exp_name_dir, loggers, split, random_test=False):
         )
         print(f"Evaluating checkpoint {checkpoint_file} on {split} split")
     trainer = get_trainer(args, loggers, mode="evaluation")
-    test_dataset = load_dataset(args, split=split, label_scheme=args.test_label_scheme, max_node_count=2048)
+    test_dataset = load_dataset(args, split=split, label_scheme=args.test_label_scheme, max_node_count=2*args.max_node_count)
     test_loader = test_dataset.get_test_dataloader(batch_size=1, num_workers=args.num_workers)
     trainer.test(model, test_loader)
 
@@ -405,7 +406,7 @@ def main(args):
         val_dataset = load_dataset(
             args,
             split="val",
-            label_scheme=args.test_label_scheme,
+            label_scheme=args.train_label_scheme,
             max_node_count=args.max_node_count
         )
         trainer_global_rank = train_once(
