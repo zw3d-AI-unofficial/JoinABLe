@@ -1,5 +1,5 @@
 ### train
-# python train.py --exp_name 00_baseline
+python train.py --exp_name 00_baseline
 python train.py --exp_name 01_quantize --quantize
 python train.py --exp_name 02_less_gat --n_layer_gat 1
 python train.py --exp_name 03_less_sat --n_layer_sat 1
@@ -18,8 +18,8 @@ python train.py --exp_name 15_bce_equ --loss bce --train_label_scheme Joint,Join
 python train.py --exp_name 16_label_smoothing --label_smoothing 0.1
 python train.py --exp_name 17_rotate  --random_rotate
 
-# python train.py --exp_name 28  --delete_cache --skip_far
-# python train.py --exp_name 29  --delete_cache --skip_interference
+# python train.py --exp_name 18  --delete_cache --skip_far
+# python train.py --exp_name 19  --delete_cache --skip_interference
 # python train.py --exp_name 20  --delete_cache --skip_nurbs
 # python train.py --exp_name 21  --delete_cache --skip_synthetic
 

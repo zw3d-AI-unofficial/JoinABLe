@@ -443,12 +443,17 @@ class JoinABLe(nn.Module):
         self.head2 = JointTypeHead(args)
         self.with_type = args.with_type
 
-        self.reset_parameters()
+        self.apply(self._init_weights)
 
-    def reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.Conv1d) or isinstance(module, nn.Conv2d):
+            torch.nn.init.kaiming_uniform_(module.weight, nonlinearity='relu')
 
     def split_and_pad(self, x, node_counts):
         x_list = torch.split(x, node_counts)
@@ -572,7 +577,7 @@ class JoinABLe(nn.Module):
                 loss_clf += self.focal_loss(x_i, labels_i)
             # Symmetric loss
             if args.loss_sym:
-                loss_sym += self.symmetric_loss(x_i, labels_i, num_nodes_graph1[i], num_nodes_graph2[i])
+                loss_sym += self.symmetric_loss(args, x_i, labels_i, num_nodes_graph1[i], num_nodes_graph2[i])
             start = end
 
         # Total loss
@@ -599,11 +604,20 @@ class JoinABLe(nn.Module):
         loss_fn = nn.BCEWithLogitsLoss(reduction="mean", pos_weight=torch.tensor([pos_weight]).to(x.device))
         return loss_fn(x, ys_matrix)
 
-    def symmetric_loss(self, x, labels, n1, n2):
+    def symmetric_loss(self, args, x, labels, n1, n2):
         x_2d = x.view(n1, n2)
-        ys_2d = torch.nonzero(labels.view(n1, n2)).to(x.device)
-        loss1 = F.cross_entropy(x_2d[ys_2d[:, 0], :], ys_2d[:, 1], reduction="mean")
-        loss2 = F.cross_entropy(x_2d[:, ys_2d[:, 1]].transpose(0, 1), ys_2d[:, 0], reduction="mean")
+        labels_2d = labels.view(n1, n2)
+        ys_2d = torch.nonzero(labels_2d).to(x.device)
+        loss1, loss2 = None, None
+        if args.loss == "mle":
+            loss1 = F.cross_entropy(x_2d[ys_2d[:, 0], :], ys_2d[:, 1], reduction="mean")
+            loss2 = F.cross_entropy(x_2d[:, ys_2d[:, 1]].transpose(0, 1), ys_2d[:, 0], reduction="mean")
+        else:
+            loss_fn1 = nn.BCEWithLogitsLoss(reduction="mean", pos_weight=torch.tensor([n2 - 1]).to(x.device))
+            loss1 = loss_fn1(x_2d[ys_2d[:, 0], :].view(-1, 1), labels_2d[ys_2d[:, 0], :].view(-1, 1).float())
+
+            loss_fn2 = nn.BCEWithLogitsLoss(reduction="mean", pos_weight=torch.tensor([n1 - 1]).to(x.device))
+            loss2 = loss_fn2(x_2d[:, ys_2d[:, 1]].view(-1, 1), labels_2d[:, ys_2d[:, 1]].view(-1, 1).float())
         loss = 0.5 * (loss1 + loss2)
         return loss
 

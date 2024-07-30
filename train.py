@@ -11,6 +11,7 @@ import json
 import wandb
 import random
 import numpy as np
+import csv
 from pathlib import Path
 
 import torch
@@ -147,53 +148,40 @@ class JointPrediction(pl.LightningModule):
         self.log(f"eval_{split}_top_1", top_k[0], on_step=False, on_epoch=True, logger=True, batch_size=1)
         self.log(f"eval_{split}_top_5", top_k[4], on_step=False, on_epoch=True, logger=True, batch_size=1)
         self.log(f"eval_{split}_top_50", top_k[9], on_step=False, on_epoch=True, logger=True, batch_size=1)
-        # Log evaluation based on if there are holes or not
-        # Batch size 1 and no shuffle lets us use the batch index
-        has_holes = self._trainer.test_dataloaders.dataset.has_holes[batch_idx]
-        top_1_holes = None
-        top_1_no_holes = None
-        # if has_holes:
-        #     self.log(f"eval_{split}_top_1_holes", top_1, on_step=False, on_epoch=True, logger=True)
-        #     top_1_holes = top_1
-        # else:
-        #     self.log(f"eval_{split}_top_1_no_holes", top_1, on_step=False, on_epoch=True, logger=True)
-        #     top_1_no_holes = top_1
-
         for key, value in JointGraphDataset.joint_type_map.items():
             if value in jg.joint_type_list:
                 self.log(f"eval_{split}_top_1_{key}", top_k[0], on_epoch=True, logger=True, batch_size=1)
 
+        # calculate my score
+        logits_flat = x.flatten()
+        labels_flat = jg.edge_attr.flatten()
+        k = torch.sum(labels_flat)
+        _, top_k_indices = torch.topk(logits_flat, k)
+        top_k_labels = labels_flat[top_k_indices]
+        my_score = torch.sum(top_k_labels) / k
+        self.log(f"eval_{split}_my_score", my_score, on_epoch=True, logger=True, batch_size=1)
+
+        # log top 50 pairs
+        _, top_50_indices = torch.topk(logits_flat, 50)
+
+
         self.test_step_outputs.append({
-            "loss": loss,
+            "joint_file_name": jg.joint_file_name[0],
+            "loss": loss.item(),
             "top_k": top_k,
-            "top_1_holes": top_1_holes,
-            "top_1_no_holes": top_1_no_holes
+            "my_score": my_score.item(),
+            "true_label_num": k.item(),
+            "top_50_pairs": [(x.item() // jg.num_nodes_graph2.item(), x.item() % jg.num_nodes_graph2.item()) for x in top_50_indices]
         })
         return {
             "loss": loss,
-            "top_k": top_k,
-            "top_1_holes": top_1_holes,
-            "top_1_no_holes": top_1_no_holes
+            "top_k": top_k
         }
 
     def on_test_epoch_end(self):
         # Get the split we are using from the dataset
         split = self._trainer.test_dataloaders.dataset.split
-        # test_iou = self.test_iou.compute()
-        # test_accuracy = self.test_accuracy.compute()
-        # self.log(f"eval_{split}_iou", test_iou)
-        # self.log(f"eval_{split}_accuracy", test_accuracy)
         all_top_k = np.stack([x["top_k"] for x in self.test_step_outputs])
-        all_top_1_holes = np.array([x["top_1_holes"] for x in self.test_step_outputs if x["top_1_holes"] is not None])
-        all_top_1_no_holes = np.array([x["top_1_no_holes"] for x in self.test_step_outputs if x["top_1_no_holes"] is not None])
-        top_1_holes = "--"
-        top_1_no_holes = "--"
-        # # All samples should be either holes or no holes, so check the counts add up to the total
-        # assert len(all_top_1_holes) + len(all_top_1_no_holes) == all_top_k.shape[0]
-        # if len(all_top_1_holes) > 0:
-        #     top_1_holes = all_top_1_holes.mean()
-        # if len(all_top_1_no_holes) > 0:
-        #     top_1_no_holes = all_top_1_no_holes.mean()
 
         k_seq = metrics.get_k_sequence()
         top_k = metrics.calculate_precision_at_k_from_sequence(all_top_k, use_percent=False)
@@ -210,17 +198,22 @@ class JointPrediction(pl.LightningModule):
                     overwrite=True
                 )
 
-        # Log true positive sample id to a txt file
-        # with open(self.args.exp_name + '.txt', 'w') as file:
-        #     for i, one_top_k in enumerate(all_top_k):
-        #         if one_top_k[0]:   
-        #             file.write(str(i) + '\n')
+        # Log results to a csv file
+        data = []
+        for x in self.test_step_outputs:
+            data.append((x["joint_file_name"], x["top_k"][0], x["top_k"][5], f"{x["my_score"]:.2f}", f"{x["loss"]:.4f}", x["true_label_num"], x["top_50_pairs"]))
+        # data.sort(key=lambda x: -float(x[4]))
+
+        exp_dir = Path(args.exp_dir)
+        csv_file = exp_dir / args.exp_name / (args.checkpoint + "_" + args.test_split + ".csv")
+        with open(csv_file, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["file_name", "top_1", "top_5", "my_score", "loss", "true_label_num", "top_50_pairs"])
+            for row in data:
+                writer.writerow(row)
+
         return {
-            # "iou": test_iou,
-            # "accuracy": test_accuracy,
-            "top_1": top_k[0],
-            "top_1_holes": top_1_holes,
-            "top_1_no_holes": top_1_no_holes
+            "top_1": top_k[0]
         }
 
     def forward(self, batch):

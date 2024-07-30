@@ -95,7 +95,7 @@ def get_parser():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=16,
+        default=8,
         help="Number of workers to use in the torch dataloader."
     )
     parser.add_argument(
