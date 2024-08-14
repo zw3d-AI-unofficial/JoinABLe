@@ -38,18 +38,6 @@ class JointGraphDataset(JointBaseDataset):
         "Circle3DCurveType": 2,
         "NurbsCurve3DCurveType": 3
     }
-    entity_type_reverse_map = {
-        0: "PlaneSurfaceType",
-        1: "CylinderSurfaceType",
-        2: "ConeSurfaceType",
-        3: "SphereSurfaceType",
-        4: "TorusSurfaceType",
-        5: "NurbsSurfaceType",
-        6: "Line3DCurveType",
-        7: "Arc3DCurveType",
-        8: "Circle3DCurveType",
-        9: "NurbsCurve3DCurveType"
-    }
     # The different types of labels for B-Rep entities
     label_map = {
         "Non-joint": 0,
@@ -71,37 +59,38 @@ class JointGraphDataset(JointBaseDataset):
 
     # Face input features and their size
     face_grid_feature_map = {
-        "points": grid_len * 3,
-        "normals": grid_len * 3,
-        "trimming_mask": grid_len * 1,
+        "points": (0, grid_len * 3),
+        "normals": (grid_len * 3, grid_len * 6),
+        "trimming_mask": (grid_len * 6, grid_len * 7)
     }
     face_entity_feature_map = {
-        "area": 1,
-        "axis_dir": 3,
-        "axis_pos": 3,
-        "bounding_box": 6,
-        "circumference": 1,
-        "entity_types": len(surface_type_map),
-        "param_1": 1,
-        "param_2": 1
+        "entity_types": (1, 2),
+        "axis_dir": (2, 5),
+        "axis_pos": (5, 8),
+        "bounding_box": (8, 14),
+        "circumference": (14, 15),
+        "param_1": (15, 16),
+        "param_2": (16, 17),
+        "area": (17, 18)
     }
 
     # Edge input features and their size
     edge_grid_feature_map = {
-        "points": grid_size * 3,  # grid_len * 3,
-        "tangents": grid_size * 3,  # grid_len * 3,
+        "points": (0, grid_size * 3),
+        "tangents": (grid_size * 3, grid_size * 6)
     }
     edge_entity_feature_map = {
-        "axis_dir": 3,
-        "axis_pos": 3,
-        "bounding_box": 6,
-        "entity_types": len(curve_type_map),
-        "length": 1,
-        "radius": 1,
-        "start_point": 3,
-        "middle_point": 3,
-        "end_point": 3
+        "entity_types": (1, 2),
+        "axis_dir": (2, 5),
+        "axis_pos": (5, 8),
+        "bounding_box": (8, 14),
+        "start_point": (14, 17),
+        "middle_point": (17, 20),
+        "end_point": (20, 23),
+        "radius": (23, 24),
+        "length": (24, 25)
     }
+    ent_feature_size = 25
 
     #  The map of edge joint types
     joint_type_map = {
@@ -301,23 +290,31 @@ class JointGraphDataset(JointBaseDataset):
                 graph1.x[:, :, :, 3:6] = self.rotate(graph1.x[:, :, :, 3:6], rotation1)
                 graph2.x[:, :, :, :3] = self.rotate(graph2.x[:, :, :, :3], rotation2)
                 graph2.x[:, :, :, 3:6] = self.rotate(graph2.x[:, :, :, 3:6], rotation2)
+
             for feature in ("axis_pos", "axis_dir", "start_point", "middle_point", "end_point"):
                 if feature in self.entity_input_features:
-                    graph1[feature] = self.rotate(graph1[feature], rotation1)
-                    graph2[feature] = self.rotate(graph2[feature], rotation2)
+                    if feature in JointGraphDataset.face_entity_feature_map:
+                        start, end = JointGraphDataset.face_entity_feature_map[feature]
+                    else:
+                        start, end = JointGraphDataset.edge_entity_feature_map[feature]
+                    graph1.ent[:, start:end] = self.rotate(graph1.ent[:, start:end], rotation1)
+                    graph2.ent[:, start:end] = self.rotate(graph2.ent[:, start:end], rotation2)
+
             if "bounding_box" in self.entity_input_features:
-                graph1.bounding_box[:, :3] = self.rotate(graph1.bounding_box[:, :3], rotation1)
-                graph2.bounding_box[:, :3] = self.rotate(graph2.bounding_box[:, :3], rotation2)
-                graph1.bounding_box[:, 3:6] = self.rotate(graph1.bounding_box[:, 3:6], rotation1)
-                graph2.bounding_box[:, 3:6] = self.rotate(graph2.bounding_box[:, 3:6], rotation2)
+                start, _ = JointGraphDataset.face_entity_feature_map["bounding_box"]
+                graph1.ent[:, start:3] = self.rotate(graph1.ent[:, start:3], rotation1)
+                graph2.ent[:, start:3] = self.rotate(graph2.ent[:, start:3], rotation2)
+                graph1.ent[:, 3:6] = self.rotate(graph1.ent[:, 3:6], rotation1)
+                graph2.ent[:, 3:6] = self.rotate(graph2.ent[:, 3:6], rotation2)
         
         # Using feature quantization if needed
         if self.quantize:
             for feature in ("axis_pos", "axis_dir", "bounding_box"):
                 if feature in self.entity_input_features:
-                    graph1[feature], graph2[feature] = self.quantile_quantization(
-                        graph1[feature], 
-                        graph2[feature], 
+                    start, end = JointGraphDataset.face_entity_feature_map[feature]
+                    graph1.ent[:, start:end], graph2.ent[:, start:end] = self.quantile_quantization(
+                        graph1.ent[:, start:end], 
+                        graph2.ent[:, start:end], 
                         n_bits=self.n_bits
                     )
             
@@ -325,9 +322,10 @@ class JointGraphDataset(JointBaseDataset):
             face_indices2 = torch.where(graph2.is_face > 0.5)[0].long()
             for feature in ("area", "circumference", "param_1", "param_2"):
                 if feature in self.entity_input_features:
-                    graph1[feature], graph2[feature] = self.quantile_quantization(
-                        graph1[feature], 
-                        graph2[feature], 
+                    start, end = JointGraphDataset.face_entity_feature_map[feature]
+                    graph1.ent[:, start:end], graph2.ent[:, start:end] = self.quantile_quantization(
+                        graph1.ent[:, start:end], 
+                        graph2.ent[:, start:end], 
                         graph1_indices=face_indices1,
                         graph2_indices=face_indices2,
                         n_bits=self.n_bits
@@ -337,9 +335,10 @@ class JointGraphDataset(JointBaseDataset):
             edge_indices2 = torch.where(graph2["is_face"] <= 0.5)[0].long()
             for feature in ("length", "radius", "start_point", "middle_point", "end_point"):
                 if feature in self.entity_input_features:
-                    graph1[feature], graph2[feature] = self.quantile_quantization(
-                        graph1[feature], 
-                        graph2[feature], 
+                    start, end = JointGraphDataset.edge_entity_feature_map[feature]
+                    graph1.ent[:, start:end], graph2.ent[:, start:end] = self.quantile_quantization(
+                        graph1.ent[:, start:end], 
+                        graph2.ent[:, start:end], 
                         graph1_indices=edge_indices1,
                         graph2_indices=edge_indices2,
                         n_bits=self.n_bits
@@ -437,18 +436,14 @@ class JointGraphDataset(JointBaseDataset):
         """Remove any unused input features"""
         # 'Remove' here is setting the features to None
         # as we can't delete the class properties
-        edge_index = g.edge_index
         for g_key in g.keys():
-            if g_key == "edge_index" or g_key == "is_face":
+            if g_key == "edge_index":
                 continue
             if g_key == "x":
                 # Remove all grid features as a group
                 # only if we aren't using any
                 if len(self.grid_input_features) == 0:
                     g.x = None
-            else:
-                if g_key not in self.entity_input_features:
-                    g[g_key] = None
         return g
 
     @staticmethod
@@ -517,11 +512,13 @@ class JointGraphDataset(JointBaseDataset):
             feature_map = {}
             feature_map.update(JointGraphDataset.face_grid_feature_map)
             feature_map.update(JointGraphDataset.face_entity_feature_map)
+            feature_map["entity_types"] = (0, len(JointGraphDataset.surface_type_map))
         elif input_feature_type == "edge":
             feature_map = {}
             feature_map.update(JointGraphDataset.edge_grid_feature_map)
             feature_map.update(JointGraphDataset.edge_entity_feature_map)
-        return sum([feature_map[f] for f in input_features])
+            feature_map["entity_types"] = (0, len(JointGraphDataset.curve_type_map))
+        return sum([feature_map[f][1] - feature_map[f][0] for f in input_features])
 
     def load_graph_json_data(self, json_file):
         """Load and return the graph json data"""
@@ -607,68 +604,35 @@ class JointGraphDataset(JointBaseDataset):
 
     def scale_features(
         self,
-        g1,
-        g2,
-        bbox1=None,
-        bbox2=None
+        g,
+        scale
     ):
         """Scale the points for both graphs"""
         # Get the combined bounding box
-        if g1.x is not None and g1.x.numel() != 0 and g2.x is not None and g2.x.numel() != 0:
-            scale = JointGraphDataset.get_common_scale(g1.x, g2.x)
-            g1.x[:, :, :, :3] *= scale
+        if g.x is not None and g.x.numel() != 0:
+            g.x[:, :, :, :3] *= scale
             # Check we aren't too far out of bounds due to the masked surface
-            if torch.max(g1.x[:, :, :, :3]) > 2.0 or torch.max(g1.x[:, :, :, :3]) < -2.0:
+            if torch.max(g.x[:, :, :, :3]) > 2.0 or torch.max(g.x[:, :, :, :3]) < -2.0:
                 return False
-            g2.x[:, :, :, :3] *= scale
-            if torch.max(g2.x[:, :, :, :3]) > 2.0 or torch.max(g2.x[:, :, :, :3]) < -2.0:
-                return False
-        else:
-            bbox_min = torch.tensor([
-                bbox1["min_point"]["x"], 
-                bbox1["min_point"]["y"], 
-                bbox1["min_point"]["z"],
-                bbox2["min_point"]["x"], 
-                bbox2["min_point"]["y"], 
-                bbox2["min_point"]["z"]
-            ])
-            bbox_max = torch.tensor([
-                bbox1["max_point"]["x"], 
-                bbox1["max_point"]["y"], 
-                bbox1["max_point"]["z"],
-                bbox2["max_point"]["x"], 
-                bbox2["max_point"]["y"], 
-                bbox2["max_point"]["z"]
-            ])
-            span = bbox_max - bbox_min
-            max_span = torch.max(span)
-            scale = 2.0 / max_span
         
+        face_indices = torch.where(g.ent[:,0] > 0.5)[0].long()
+        edge_indices = torch.where(g.ent[:,0] <= 0.5)[0].long()
         for feature in ("axis_pos", "bounding_box", "circumference", "param_1", "param_2", \
                         "length", "radius", "start_point", "middle_point", "end_point"):
-            if g1[feature] is not None:
-                g1[feature] *= scale
-                g2[feature] *= scale
-        if g1.area is not None:
-            g1.area *= scale * scale
-            g2.area *= scale * scale
+            if feature in JointGraphDataset.face_entity_feature_map:
+                start, end = JointGraphDataset.face_entity_feature_map[feature]
+                g.ent[face_indices, start:end] = g.ent[face_indices, start:end] * scale
+            if feature in JointGraphDataset.edge_entity_feature_map:
+                start, end = JointGraphDataset.edge_entity_feature_map[feature]
+                g.ent[edge_indices, start:end] = g.ent[edge_indices, start:end] * scale
+
+        start, end = JointGraphDataset.face_entity_feature_map["area"]
+        g.ent[face_indices, start:end] = g.ent[face_indices, start:end] * scale * scale
         return True
     
-    def is_overlapping(self, box1, box2):
-        """
-        Function to check if two 3D bounding boxes overlap.
-
-        Parameters:
-        box1 (tuple): Tuple representing the coordinates of box1 in the format (x1, y1, z1, x2, y2, z2),
-                    where (x1, y1, z1) represents the coordinates of one corner,
-                    and (x2, y2, z2) represents the coordinates of the opposite corner.
-        box2 (tuple): Tuple representing the coordinates of box2 in the same format as box1.
-
-        Returns:
-        bool: True if the boxes overlap, False otherwise.
-        """
-        x1_min, y1_min, z1_min, x1_max, y1_max, z1_max = box1
-        x2_min, y2_min, z2_min, x2_max, y2_max, z2_max = box2
+    def is_overlapping(self, bbox_min, bbox_max):
+        x1_min, y1_min, z1_min, x2_min, y2_min, z2_min = bbox_min
+        x1_max, y1_max, z1_max, x2_max, y2_max, z2_max = bbox_max
 
         # Check if there is no overlap in any dimension
         if x1_max < x2_min or x2_max < x1_min or \
@@ -701,25 +665,25 @@ class JointGraphDataset(JointBaseDataset):
             if total_nodes > self.max_node_count:
                 return None
         # Skip parts pairs that are far away
+        bbox1, bbox2 = g1d["properties"]["bounding_box"], g2d["properties"]["bounding_box"]
+        bbox_min = torch.tensor([
+            bbox1["min_point"]["x"], 
+            bbox1["min_point"]["y"], 
+            bbox1["min_point"]["z"],
+            bbox2["min_point"]["x"], 
+            bbox2["min_point"]["y"], 
+            bbox2["min_point"]["z"]
+       ])
+        bbox_max = torch.tensor([
+            bbox1["max_point"]["x"], 
+            bbox1["max_point"]["y"], 
+            bbox1["max_point"]["z"],
+            bbox2["max_point"]["x"], 
+            bbox2["max_point"]["y"], 
+            bbox2["max_point"]["z"]
+        ])
         if self.skip_far:
-            bbox1, bbox2 = g1d["properties"]["bounding_box"], g2d["properties"]["bounding_box"]
-            bbox1 = (
-                bbox1["min_point"]["x"],
-                bbox1["min_point"]["y"],
-                bbox1["min_point"]["z"],
-                bbox1["max_point"]["x"],
-                bbox1["max_point"]["y"],
-                bbox1["max_point"]["z"],
-            )
-            bbox2 = (
-                bbox2["min_point"]["x"],
-                bbox2["min_point"]["y"],
-                bbox2["min_point"]["z"],
-                bbox2["max_point"]["x"],
-                bbox2["max_point"]["y"],
-                bbox2["max_point"]["z"],
-            )
-            if not self.is_overlapping(bbox1, bbox2):
+            if not self.is_overlapping(bbox_min, bbox_max):
                 return None
         # Get the joint label matrix
         label_matrix, joint_type_list = self.get_label_matrix(
@@ -735,14 +699,19 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_list, joint_file_name)
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
-            scale_good = self.scale_features(
-                g1,
-                g2,
-                bbox1=g1d["properties"]["bounding_box"],
-                bbox2=g2d["properties"]["bounding_box"],
-            )
+            # if g1.x is not None and g1.x.numel() != 0 and g2.x is not None and g2.x.numel() != 0:
+            #     scale = JointGraphDataset.get_common_scale(g1.x, g2.x)
+            # else:
+            #     span = bbox_max - bbox_min
+            #     max_span = torch.max(span)
+            #     scale = 2.0 / max_span
+            span = bbox_max - bbox_min
+            max_span = torch.max(span)
+            scale = 2.0 / max_span
+            g1_scale_good = self.scale_features(g1, scale)
+            g2_scale_good = self.scale_features(g2, scale)
             # Throw out if we can't scale properly due to the masked surface area
-            if not scale_good:
+            if not g1_scale_good or not g2_scale_good:
                 print("Discarding graph with bad scale")
                 return None
         # Flag to indicate if this design has holes
@@ -797,6 +766,8 @@ class JointGraphDataset(JointBaseDataset):
             # as we have already pulled out what we need
             self.delete_features(node)
 
+        # Convert to a graph
+
         # Load the networkx graph file
         nxg = json_graph.node_link_graph(g_json)
         # Convert to a graph
@@ -849,9 +820,32 @@ class JointGraphDataset(JointBaseDataset):
 
     def reshape_graph_features(self, g):
         """Reshape the multi-dimensional graph features from a list to tensors"""
-        if g.x is not None and g.x.numel() != 0:
-            g.x = g.x.reshape(
-                (-1, self.grid_size, self.grid_size, self.grid_channels))
+        ent_feature = torch.zeros((
+            g.num_nodes,
+            JointGraphDataset.ent_feature_size
+        ))
+        face_indices = torch.where(g["is_face"] > 0.5)[0].long()
+        edge_indices = torch.where(g["is_face"] <= 0.5)[0].long()
+        ent_feature[face_indices, 0] = 1
+        for key, value in JointGraphDataset.face_entity_feature_map.items():
+            start, end = value
+            if end - start == 1:
+                ent_feature[face_indices, start:end] = g[key][face_indices].unsqueeze(1).float()
+            else:
+                ent_feature[face_indices, start:end] = g[key][face_indices]
+        for key, value in JointGraphDataset.edge_entity_feature_map.items():
+            start, end = value
+            if end - start == 1:
+                ent_feature[edge_indices, start:end] = g[key][edge_indices].unsqueeze(1)
+            else:
+                ent_feature[edge_indices, start:end] = g[key][edge_indices]
+        del g["is_face"]
+        for key in JointGraphDataset.face_entity_feature_map.keys():
+            del g[key]
+        for key in JointGraphDataset.edge_entity_feature_map.keys():
+            if key in g:
+                del g[key]
+        g["ent"] = ent_feature
         return g
 
     def get_grid_features(self, node, center):
@@ -929,10 +923,10 @@ class JointGraphDataset(JointBaseDataset):
         """Get the entity type, either surface or curve type for the node"""
         if "surface_type" in node:
             surface_type = self.surface_type_map[node["surface_type"]]
-            return torch.tensor(surface_type, dtype=torch.long)
+            return torch.tensor(surface_type, dtype=torch.float)
         elif "curve_type" in node:
             curve_type = self.curve_type_map[node["curve_type"]]
-            return torch.tensor(curve_type, dtype=torch.long)
+            return torch.tensor(curve_type, dtype=torch.float)
         else:
             raise Exception("Unknown node entity type")
     

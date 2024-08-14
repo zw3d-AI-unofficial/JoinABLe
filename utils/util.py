@@ -171,7 +171,7 @@ def get_loggers(args, log_dir):
         name="log"
     )
     wandb_logger = pl.loggers.WandbLogger(
-        project="joinable_gpt", 
+        project="joinable_onnx", 
         entity="fusiqiao101", 
         name=args.exp_name, 
         offline=args.offline

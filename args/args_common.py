@@ -107,7 +107,7 @@ def get_parser():
     parser.add_argument(
         "--exp_dir",
         type=str,
-        default="results",
+        default="results_onnx",
         help="Directory to save the best and last checkpoints and logs."
     )
     parser.add_argument(

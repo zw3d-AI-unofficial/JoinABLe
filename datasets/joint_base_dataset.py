@@ -195,8 +195,9 @@ class JointBaseDataset(Dataset):
             else:
                 raise Exception("Unknown split name")
             return joint_files
-
-    def get_random_rotation(self):
+        
+    @staticmethod
+    def get_random_rotation():
         """Get a random rotation in 90 degree increments along the canonical axes"""
         axes = [
             np.array([1.0, 0.0, 0.0]),

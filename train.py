@@ -60,11 +60,16 @@ class JointPrediction(pl.LightningModule):
         joint_graph_unbatched = jg.to_data_list()
         batch_size = len(joint_graph_unbatched)
         
-        x = self.model(g1, g2, jg)
+        num_nodes = torch.tensor([
+            [item.num_nodes_graph1 for item in joint_graph_unbatched],
+            [item.num_nodes_graph2 for item in joint_graph_unbatched]
+        ])
+        x = self.model(g1.x, g1.ent, g1.edge_index, g2.x, g2.ent, g2.edge_index, jg.edge_index, num_nodes)
         loss = self.model.compute_loss(self.args, x, jg)
         if self.args.with_type:
             x, x_type = x
-            type_acc = self.model.precision_type(x_type, jg.joint_type_list)
+            ids = torch.where(jg.edge_attr == 1)[0].long()
+            type_acc = self.model.precision_type(x_type[ids], jg.joint_type_list)
             self.log("train_type_acc", type_acc, on_step=False, on_epoch=True, logger=True, batch_size=batch_size)
 
         top_k = [0, 0, 0]
@@ -112,12 +117,14 @@ class JointPrediction(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         g1, g2, jg = batch
         jg.edge_attr = jg.edge_attr.long()
-        x = self.model(g1, g2, jg)
+        num_nodes = torch.tensor([[g1.num_nodes], [g2.num_nodes]])
+        x = self.model(g1.x, g1.ent, g1.edge_index, g2.x, g2.ent, g2.edge_index, jg.edge_index, num_nodes)
         loss = self.model.compute_loss(self.args, x, jg)
         if self.args.with_type:
             x, x_type = x
-            precision_type = self.model.precision_type(x_type, jg.joint_type_list)
-            self.log("val_type_acc", precision_type, on_step=False, on_epoch=True, logger=True, batch_size=1)
+            ids = torch.where(jg.edge_attr == 1)[0].long()
+            type_acc = self.model.precision_type(x_type[ids], jg.joint_type_list)
+            self.log("val_type_acc", type_acc, on_step=False, on_epoch=True, logger=True, batch_size=1)
         top_k = self.model.precision_at_top_k(x, jg.edge_attr, g1.num_nodes, g2.num_nodes, k=[1,5,50])
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=False, logger=True, batch_size=1)
         self.log("val_top_1", top_k[0], on_step=False, on_epoch=True, prog_bar=False, logger=True, batch_size=1)
@@ -131,12 +138,14 @@ class JointPrediction(pl.LightningModule):
         # Inference
         g1, g2, jg = batch
         jg.edge_attr = jg.edge_attr.long()
-        x = self.model(g1, g2, jg)
+        num_nodes = torch.tensor([[g1.num_nodes], [g2.num_nodes]])
+        x = self.model(g1.x, g1.ent, g1.edge_index, g2.x, g2.ent, g2.edge_index, jg.edge_index, num_nodes)
         loss = self.model.compute_loss(self.args, x, jg)
         if self.args.with_type:
             x, x_type = x
-            precision_type = self.model.precision_type(x_type, jg.joint_type_list)
-            self.log("test_type_acc", precision_type, on_step=False, on_epoch=True, logger=True, batch_size=1)
+            ids = torch.where(jg.edge_attr == 1)[0].long()
+            type_acc = self.model.precision_type(x_type[ids], jg.joint_type_list)
+            self.log("test_type_acc", type_acc, on_step=False, on_epoch=True, logger=True, batch_size=1)
 
         # Get the probabilities and calculate metrics
         # prob = F.softmax(x, dim=0)
@@ -162,8 +171,7 @@ class JointPrediction(pl.LightningModule):
         self.log(f"eval_{split}_my_score", my_score, on_epoch=True, logger=True, batch_size=1)
 
         # log top 50 pairs
-        _, top_50_indices = torch.topk(logits_flat, 50)
-
+        _, top_50_indices = torch.topk(logits_flat, min(50, logits_flat.shape[0]))
 
         self.test_step_outputs.append({
             "joint_file_name": jg.joint_file_name[0],

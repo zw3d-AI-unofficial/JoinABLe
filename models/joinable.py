@@ -1,4 +1,3 @@
-import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +8,7 @@ from torchvision.ops.focal_loss import sigmoid_focal_loss
 
 from utils import metrics
 from datasets.joint_graph_dataset import JointGraphDataset
+from torch_geometric.data import Data, Batch
 
 
 def cnn2d(inp_channels, hidden_channels, out_dim, num_layers=1):
@@ -36,7 +36,6 @@ def cnn1d(inp_channels, hidden_channels, out_dim, num_layers=1):
 
 
 class MLP(nn.Module):
-
     def __init__(self, args):
         super().__init__()
         self.c_fc    = nn.Linear(args.n_embd, 4 * args.n_embd, bias=args.bias)
@@ -106,13 +105,11 @@ class FaceEmbedding(nn.Module):
         """Get the entity features that were requested"""
         ent_list = []
         for input_feature in self.ent_input_features:
-            feat = g[input_feature][indices]
+            start, end = JointGraphDataset.face_entity_feature_map[input_feature]
+            feat = g.ent[indices, start:end]
             # Convert entity types to a one hot encoding
             if input_feature == "entity_types":
-                feat = F.one_hot(feat, num_classes=len(JointGraphDataset.surface_type_map))
-            # Make all features 2D
-            if len(feat.shape) == 1:
-                feat = feat.unsqueeze(1)
+                feat = F.one_hot(feat.flatten().long(), num_classes=len(JointGraphDataset.surface_type_map))
             ent_list.append(feat)
         return torch.cat(ent_list, dim=1).float()
 
@@ -133,7 +130,7 @@ class FaceEmbedding(nn.Module):
     def forward_one_graph(self, g):
         def _get_face_node_indices(g):
             """Get the indices of graph nodes corresponding to B-rep faces"""
-            face_indices = torch.where(g["is_face"] > 0.5)[0].long()
+            face_indices = torch.where(g.ent[:, 0] > 0.5)[0].long()
             return face_indices
 
         face_node_indices = _get_face_node_indices(g)
@@ -148,7 +145,8 @@ class FaceEmbedding(nn.Module):
             if self.quantize:
                 for key in self.ent_input_features:
                     if key in self.ent_embd:
-                        embedding = self.ent_embd[key](g[key][face_node_indices])
+                        start, end = JointGraphDataset.face_entity_feature_map[key]
+                        embedding = self.ent_embd[key](g.ent[face_node_indices, start:end])
                         x[face_node_indices, :] += embedding.reshape(embedding.shape[0], -1)
             else:
                 ent_faces = self.get_entity_features(g, face_node_indices)
@@ -205,13 +203,11 @@ class EdgeEmbedding(nn.Module):
         """Get the entity features that were requested"""
         ent_list = []
         for input_feature in self.entity_input_features:
-            feat = g[input_feature][indices]
+            start, end = JointGraphDataset.edge_entity_feature_map[input_feature]
+            feat = g.ent[indices, start:end]
             if input_feature == "entity_types":
                 # Convert entity types to a one hot encoding
-                feat = F.one_hot(feat, num_classes=len(JointGraphDataset.curve_type_map))
-            # Make all features 2D
-            if len(feat.shape) == 1:
-                feat = feat.unsqueeze(1)
+                feat = F.one_hot(feat.flatten().long(), num_classes=len(JointGraphDataset.curve_type_map))
             ent_list.append(feat)
         return torch.cat(ent_list, dim=1).float()
 
@@ -231,7 +227,7 @@ class EdgeEmbedding(nn.Module):
     def forward_one_graph(self, g):
         def _get_edge_node_indices(g):
             """Get the indices of graph nodes corresponding to B-rep edges"""
-            edge_indices = torch.where(g["is_face"] <= 0.5)[0].long()
+            edge_indices = torch.where(g.ent[:, 0] <= 0.5)[0].long()
             return edge_indices
         edge_node_indices = _get_edge_node_indices(g)
         device = g.edge_index.device
@@ -245,7 +241,8 @@ class EdgeEmbedding(nn.Module):
             if self.quantize:
                 for key in self.entity_input_features:
                     if key in self.ent_embd:
-                        embedding = self.ent_embd[key](g[key][edge_node_indices])
+                        indices = JointGraphDataset.edge_entity_feature_map[key]
+                        embedding = self.ent_embd[key](g.ent[edge_node_indices, indices[0]:indices[1]])
                         x[edge_node_indices, :] += embedding.reshape(embedding.shape[0], -1)
             else:
                 ent_edges = self.get_entity_features(g, edge_node_indices)
@@ -260,7 +257,6 @@ class EdgeEmbedding(nn.Module):
 
 
 class GATBlock(nn.Module):
-    
     def __init__(self, args):
         super().__init__()
         n_embd = args.n_embd
@@ -276,7 +272,6 @@ class GATBlock(nn.Module):
 
 
 class SelfAttention(nn.Module):
-
     def __init__(self, args):
         super().__init__()
         assert args.n_embd % args.n_head == 0
@@ -310,7 +305,6 @@ class SelfAttention(nn.Module):
 
 
 class SATBlock(nn.Module):
-
     def __init__(self, args):
         super().__init__()
         self.ln_1 = LayerNorm(args.n_embd, bias=args.bias)
@@ -325,7 +319,6 @@ class SATBlock(nn.Module):
     
 
 class CrossAttention(nn.Module):
-
     def __init__(self, args):
         super().__init__()
         assert args.n_embd % args.n_head == 0
@@ -386,7 +379,6 @@ class CATBlock(nn.Module):
 
 
 class MLPBlock(nn.Module):
-
     def __init__(self, args):
         super().__init__()
         self.ln = LayerNorm(args.n_embd, bias=args.bias)
@@ -404,8 +396,8 @@ class JointPredictHead(nn.Module):
         self.ln = LayerNorm(args.n_embd, bias=args.bias)
         self.out = nn.Linear(args.n_embd, 1, bias=args.bias)
 
-    def forward(self, x, jg):
-        src, tgt = jg.edge_index[0].long(), jg.edge_index[1].long()
+    def forward(self, x, edge_index):
+        src, tgt = edge_index[0].long(), edge_index[1].long()
         x = x[src, :] + x[tgt, :]
         for block in self.block_list:
             x = block(x)
@@ -420,10 +412,11 @@ class JointTypeHead(nn.Module):
         self.ln = LayerNorm(args.n_embd, bias=args.bias)
         self.out = nn.Linear(args.n_embd, len(JointGraphDataset.joint_type_map), bias=args.bias)
 
-    def forward(self, x, jg):
-        ids = torch.where(jg.edge_attr == 1)[0].long()
-        src, tgt = jg.edge_index[0].long(), jg.edge_index[1].long()
-        x = x[src[ids], :] + x[tgt[ids], :]
+    def forward(self, x, edge_index):
+        src, tgt = edge_index[0].long(), edge_index[1].long()
+        x = x[src, :] + x[tgt, :]
+        # ids = torch.where(jg.edge_attr == 1)[0].long()
+        # x = x[src[ids], :] + x[tgt[ids], :]
         for block in self.block_list:
             x = block(x)
         logits = self.out(self.ln(x))
@@ -497,8 +490,23 @@ class JoinABLe(nn.Module):
         x = torch.cat(concat_x, dim=0)
         return x
     
-    def forward(self, g1, g2, jg):
+    def forward(
+            self, 
+            g1_grid, 
+            g1_ent, 
+            g1_edge_index,
+            g2_grid, 
+            g2_ent, 
+            g2_edge_index,
+            jg_edge_index,
+            num_nodes
+        ):
         # Compute the features for the is_face nodes, and set the rest to zero
+        g1 = Data(g1_grid, g1_edge_index)
+        g2 = Data(g2_grid, g2_edge_index)
+        g1.ent = g1_ent
+        g2.ent = g2_ent
+
         x1_face, x2_face = self.face_embd(g1, g2)
         # Compute the features for the NOT is_face nodes, and set the rest to zero
         x1_edge, x2_edge = self.edge_embd(g1, g2)
@@ -510,11 +518,14 @@ class JoinABLe(nn.Module):
             x1 = block(x1, g1.edge_index)
             x2 = block(x2, g2.edge_index)
         # Prepare data for attention layers
-        joint_graph_unbatched = jg.to_data_list()
-        n_nodes1 = [item.num_nodes_graph1 for item in joint_graph_unbatched]
-        n_nodes2 = [item.num_nodes_graph2 for item in joint_graph_unbatched]
-        x1 = self.split_and_pad(x1, n_nodes1)
-        x2 = self.split_and_pad(x2, n_nodes2)
+        n_nodes1 = torch.unbind(num_nodes[0, :])
+        n_nodes2 = torch.unbind(num_nodes[1, :])
+        if self.training:
+            x1 = self.split_and_pad(x1, n_nodes1)
+            x2 = self.split_and_pad(x2, n_nodes2)
+        else:
+            x1 = x1.unsqueeze(0)
+            x2 = x2.unsqueeze(0)
         # Attention layers
         attn_mask1, attn_mask2, attn_mask_cross = self.get_attn_masks(x1, x2, n_nodes1, n_nodes2)
         for block in self.sat_list:
@@ -524,9 +535,9 @@ class JoinABLe(nn.Module):
             x1, x2 = block(x1, x2, attn_mask_cross)
         # Pass to post-net
         x = self.unpad_and_concat(x1, x2, n_nodes1, n_nodes2)
-        logits = self.head1(x, jg)
+        logits = self.head1(x, jg_edge_index)
         if self.with_type:
-            type_logits = self.head2(x, jg)
+            type_logits = self.head2(x, jg_edge_index)
             return logits, type_logits
         return logits
 
