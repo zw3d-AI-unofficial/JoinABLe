@@ -21,7 +21,7 @@ def get_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="data/zw3d-joinable-dataset",
+        default="/home/share/brep/zw3d/joint/zw3d-joinable-dataset/joint",
         help="Dataset path."
     )
     parser.add_argument(
@@ -115,30 +115,6 @@ def get_parser():
         type=int,
         default=42,
         help="Random seed to use"
-    )
-    parser.add_argument(
-        "--skip_far",
-        action="store_true",
-        default=False,
-        help="Skip pairs that are far away."
-    )
-    parser.add_argument(
-        "--skip_interference",
-        action="store_true",
-        default=False,
-        help="Skip pairs that have interference."
-    )
-    parser.add_argument(
-        "--skip_nurbs",
-        action="store_true",
-        default=False,
-        help="Skip true label with nurbs curve or surface as entity."
-    )
-    parser.add_argument(
-        "--skip_synthetic",
-        action="store_true",
-        default=False,
-        help="Skip synthetic joints."
     )
     parser.add_argument(
         "--joint_type",

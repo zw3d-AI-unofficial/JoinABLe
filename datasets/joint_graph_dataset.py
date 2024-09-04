@@ -38,18 +38,6 @@ class JointGraphDataset(JointBaseDataset):
         "Circle3DCurveType": 2,
         "NurbsCurve3DCurveType": 3
     }
-    entity_type_reverse_map = {
-        0: "PlaneSurfaceType",
-        1: "CylinderSurfaceType",
-        2: "ConeSurfaceType",
-        3: "SphereSurfaceType",
-        4: "TorusSurfaceType",
-        5: "NurbsSurfaceType",
-        6: "Line3DCurveType",
-        7: "Arc3DCurveType",
-        8: "Circle3DCurveType",
-        9: "NurbsCurve3DCurveType"
-    }
     # The different types of labels for B-Rep entities
     label_map = {
         "Non-joint": 0,
@@ -128,10 +116,6 @@ class JointGraphDataset(JointBaseDataset):
         label_scheme=None,
         input_features="entity_types,area,length,points,normals,tangents,trimming_mask",
         joint_type="all",
-        skip_far=False,
-        skip_interference=False,
-        skip_nurbs=False,
-        skip_synthetic=False,
         quantize=False,
         n_bits=9
     ):
@@ -166,10 +150,6 @@ class JointGraphDataset(JointBaseDataset):
         self.center_and_scale = center_and_scale
         self.max_node_count = max_node_count
         self.labels_on, self.labels_off = self.parse_label_scheme_arg(label_scheme)
-        self.skip_far = skip_far
-        self.skip_interference = skip_interference
-        self.skip_nurbs = skip_nurbs
-        self.skip_synthetic = skip_synthetic
         self.joint_type = joint_type
         self.quantize = quantize
         self.n_bits = n_bits
@@ -605,45 +585,19 @@ class JointGraphDataset(JointBaseDataset):
         scale = (1.0 / bboxes.abs().max()) * 0.999999
         return scale
 
-    def scale_features(
-        self,
-        g1,
-        g2,
-        bbox1=None,
-        bbox2=None
-    ):
+    def scale_features(self, g1, g2):
         """Scale the points for both graphs"""
         # Get the combined bounding box
-        if g1.x is not None and g1.x.numel() != 0 and g2.x is not None and g2.x.numel() != 0:
-            scale = JointGraphDataset.get_common_scale(g1.x, g2.x)
-            g1.x[:, :, :, :3] *= scale
-            # Check we aren't too far out of bounds due to the masked surface
-            if torch.max(g1.x[:, :, :, :3]) > 2.0 or torch.max(g1.x[:, :, :, :3]) < -2.0:
-                return False
-            g2.x[:, :, :, :3] *= scale
-            if torch.max(g2.x[:, :, :, :3]) > 2.0 or torch.max(g2.x[:, :, :, :3]) < -2.0:
-                return False
-        else:
-            bbox_min = torch.tensor([
-                bbox1["min_point"]["x"], 
-                bbox1["min_point"]["y"], 
-                bbox1["min_point"]["z"],
-                bbox2["min_point"]["x"], 
-                bbox2["min_point"]["y"], 
-                bbox2["min_point"]["z"]
-            ])
-            bbox_max = torch.tensor([
-                bbox1["max_point"]["x"], 
-                bbox1["max_point"]["y"], 
-                bbox1["max_point"]["z"],
-                bbox2["max_point"]["x"], 
-                bbox2["max_point"]["y"], 
-                bbox2["max_point"]["z"]
-            ])
-            span = bbox_max - bbox_min
-            max_span = torch.max(span)
-            scale = 2.0 / max_span
-        
+        if g1.x is None or g1.x.numel() == 0 or g2.x is None or g2.x.numel() == 0:
+            return False
+        scale = JointGraphDataset.get_common_scale(g1.x, g2.x)
+        g1.x[:, :, :, :3] *= scale
+        # Check we aren't too far out of bounds due to the masked surface
+        if torch.max(g1.x[:, :, :, :3]) > 2.0 or torch.max(g1.x[:, :, :, :3]) < -2.0:
+            return False
+        g2.x[:, :, :, :3] *= scale
+        if torch.max(g2.x[:, :, :, :3]) > 2.0 or torch.max(g2.x[:, :, :, :3]) < -2.0:
+            return False
         for feature in ("axis_pos", "bounding_box", "circumference", "param_1", "param_2", \
                         "length", "radius", "start_point", "middle_point", "end_point"):
             if g1[feature] is not None:
@@ -683,10 +637,6 @@ class JointGraphDataset(JointBaseDataset):
         joint_file = self.root_dir / joint_file_name
         with open(joint_file, encoding="utf8") as f:
             joint_data = json.load(f)
-        # Skip pairs that have interference
-        if self.skip_interference:
-            if "interference" in joint_data and joint_data["interference"]:
-                return None
         g1, g1d, face_count1, edge_count1, g1_json_file = self.load_graph_body(
             joint_data["body_one"])
         if g1 is None:
@@ -699,27 +649,6 @@ class JointGraphDataset(JointBaseDataset):
         total_nodes = face_count1 + edge_count1 + face_count2 + edge_count2
         if self.max_node_count > 0:
             if total_nodes > self.max_node_count:
-                return None
-        # Skip parts pairs that are far away
-        if self.skip_far:
-            bbox1, bbox2 = g1d["properties"]["bounding_box"], g2d["properties"]["bounding_box"]
-            bbox1 = (
-                bbox1["min_point"]["x"],
-                bbox1["min_point"]["y"],
-                bbox1["min_point"]["z"],
-                bbox1["max_point"]["x"],
-                bbox1["max_point"]["y"],
-                bbox1["max_point"]["z"],
-            )
-            bbox2 = (
-                bbox2["min_point"]["x"],
-                bbox2["min_point"]["y"],
-                bbox2["min_point"]["z"],
-                bbox2["max_point"]["x"],
-                bbox2["max_point"]["y"],
-                bbox2["max_point"]["z"],
-            )
-            if not self.is_overlapping(bbox1, bbox2):
                 return None
         # Get the joint label matrix
         label_matrix, joint_type_list = self.get_label_matrix(
@@ -735,12 +664,7 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_list, joint_file_name)
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
-            scale_good = self.scale_features(
-                g1,
-                g2,
-                bbox1=g1d["properties"]["bounding_box"],
-                bbox2=g2d["properties"]["bounding_box"],
-            )
+            scale_good = self.scale_features(g1, g2)
             # Throw out if we can't scale properly due to the masked surface area
             if not scale_good:
                 print("Discarding graph with bad scale")
@@ -1005,10 +929,6 @@ class JointGraphDataset(JointBaseDataset):
         label_matrix = torch.zeros((entity_count1, entity_count2), dtype=torch.long)
         joint_type_matrix = torch.zeros((entity_count1, entity_count2), dtype=torch.long)
         for i, joint in enumerate(joints):  
-            # Check synthetic
-            if self.skip_synthetic:
-                if "is_synthetic" in joint and joint["is_synthetic"]:
-                    continue
             entity1 = joint["geometry_or_origin_one"]["entity_one"]
             entity1_index = entity1["index"]
             entity1_type = entity1["type"]
@@ -1025,16 +945,6 @@ class JointGraphDataset(JointBaseDataset):
                         flag = True
                         break
                 if not flag:
-                    continue
-            # Check nurbs
-            if self.skip_nurbs:
-                if entity1_type == "BRepFace" and entity1["surface_type"] == "NurbsSurfaceType":
-                    continue
-                if entity2_type == "BRepFace" and entity2["surface_type"] == "NurbsSurfaceType":
-                    continue
-                if entity1_type == "BRepEdge" and entity1["curve_type"] == "NurbsCurve3DCurveType":
-                    continue
-                if entity2_type == "BRepEdge" and entity2["curve_type"] == "NurbsCurve3DCurveType":
                     continue
             # Offset the joint indices for use in the label matrix
             entity1_index = self.offset_joint_index(
@@ -1059,30 +969,6 @@ class JointGraphDataset(JointBaseDataset):
             # Set the user selected joint indices
             label_matrix[entity1_index][entity2_index] = self.label_map["Joint"]
             joint_type_matrix[entity1_index][entity2_index] = joint_type
-        # # Include ambiguous and hole labels
-        # # Adding separate labels to the label_matrix
-        # # We need to do this after all joints are marked out as labels
-        # g1_ambiguous, g2_ambiguous = self.set_ambiguous_labels(g1, g2, label_matrix)
-        # g1_holes, g2_holes = self.set_hole_labels(g1d, g2d, label_matrix, joint_data)
-
-        # # Only do further work if we have holes or ambiguous entities
-        # eq_count = len(g1_ambiguous) + len(g2_ambiguous) + len(g1_holes) + len(g2_holes)
-        # if eq_count > 0:
-        #     # First calculate the axis lines and cache them
-        #     g1_axis_lines = self.get_axis_lines_from_graph(g1d)
-        #     g2_axis_lines = self.get_axis_lines_from_graph(g2d)
-
-        #     # Now find and set the equivalents
-        #     self.set_equivalents(
-        #         g1_ambiguous, g2_ambiguous,
-        #         g1_axis_lines, g2_axis_lines,
-        #         label_matrix, self.label_map["AmbiguousEquivalent"]
-        #     )
-        #     self.set_equivalents(
-        #         g1_holes, g2_holes,
-        #         g1_axis_lines, g2_axis_lines,
-        #         label_matrix, self.label_map["HoleEquivalent"]
-        #     )
         return label_matrix, joint_type_matrix
 
     def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_matrix, joint_file_name):

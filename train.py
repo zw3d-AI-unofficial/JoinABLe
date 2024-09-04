@@ -202,7 +202,7 @@ class JointPrediction(pl.LightningModule):
         data = []
         for x in self.test_step_outputs:
             data.append((x["joint_file_name"], x["top_k"][0], x["top_k"][5], f"{x["my_score"]:.2f}", f"{x["loss"]:.4f}", x["true_label_num"], x["top_50_pairs"]))
-        # data.sort(key=lambda x: -float(x[4]))
+        data.sort(key=lambda x: -float(x[4]))
 
         exp_dir = Path(args.exp_dir)
         csv_file = exp_dir / args.exp_name / (args.checkpoint + "_" + args.test_split + ".csv")
@@ -246,10 +246,6 @@ def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint",
         label_scheme=label_scheme,
         max_node_count=max_node_count,
         input_features=args.input_features,
-        skip_far=args.skip_far,
-        skip_interference=args.skip_interference,
-        skip_nurbs=args.skip_nurbs,
-        skip_synthetic=args.skip_synthetic,
         joint_type=args.joint_type,
         quantize=args.quantize,
         n_bits=args.n_bits
@@ -369,9 +365,9 @@ def seed_everything(seed):
 def main(args):
     """Main entry point for our training script"""
 
-    os.environ['HTTP_PROXY'] = 'http://127.0.0.1:2080'
-    os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:2080'
-    os.environ['ALL_PROXY'] = 'socks5://127.0.0.1:2080'
+    # os.environ['HTTP_PROXY'] = 'http://127.0.0.1:2080'
+    # os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:2080'
+    # os.environ['ALL_PROXY'] = 'socks5://127.0.0.1:2080'
     torch.set_float32_matmul_precision('high')
     seed_everything(args.seed)
     

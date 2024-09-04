@@ -13,7 +13,7 @@ def get_parser():
     parser.add_argument(
         "--input_features",
         type=str,
-        default="entity_types,area,length,points,normals,tangents,trimming_mask",
+        default="entity_types,area,length,points,trimming_mask",
         help="Input features to use as a string separated by commas.\
                 Can include: points, normals, tangents, trimming_mask,\
                 axis_pos, axis_dir, bounding_box, entity_types\
