@@ -95,7 +95,7 @@ def get_parser():
     parser.add_argument(
         "--max_node_count",
         type=int,
-        default=1024,
+        default=2048,
         help="Restrict training data to graph pairs with under this number of nodes.\
               Set to 0 to train on all data."
     )

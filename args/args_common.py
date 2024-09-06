@@ -21,8 +21,14 @@ def get_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="data/zw3d-joinable-dataset",
+        default="/home/share/brep/zw3d/joint/zw3d-joinable-dataset/joint/",
         help="Dataset path."
+    )
+    parser.add_argument(
+        "--joint_judge",
+        type=str,
+        default="/home/share/brep/zw3d/joint/zw3d-joinable-dataset/joint/joint_judge.json",
+        help="Joint_judge path."
     )
     parser.add_argument(
         "--delete_cache",
@@ -30,13 +36,13 @@ def get_parser():
         default=False,
         help="Delete the dataset cache."
     )
-    parser.add_argument(
+    parser.add_argument( #修改
         "--epochs",
         type=int,
         default=50,
         help="Number of epochs to train."
     )
-    parser.add_argument(
+    parser.add_argument( #修改2
         "--batch_size",
         type=int,
         default=8,
@@ -148,6 +154,12 @@ def get_parser():
                 Can include: Other, Coincident, Tangent, Concentric,\
                 Parallel, Perpendicular"
     )
+    parser.add_argument(
+        "--binary_threshold",           #修改
+        type=float,
+        default=0.5,
+        help="Threshold for binary classification."
+    )    
     return parser
 
 

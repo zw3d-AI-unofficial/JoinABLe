@@ -63,7 +63,7 @@ class JointGraphDataset(JointBaseDataset):
     # 10 x 10 grid
     grid_size = 10
     # Grid 1D length
-    grid_len = grid_size * grid_size
+    grid_len = grid_size * grid_size #100
     # pt.x, pt.y, pt.z, normal.x, normal.y, normal.z, mask
     grid_channels = 7
     # Total tensor size
@@ -71,9 +71,9 @@ class JointGraphDataset(JointBaseDataset):
 
     # Face input features and their size
     face_grid_feature_map = {
-        "points": grid_len * 3,
-        "normals": grid_len * 3,
-        "trimming_mask": grid_len * 1,
+        "points": grid_len * 3,         #300
+        "normals": grid_len * 3,        #300
+        "trimming_mask": grid_len * 1,  #100
     }
     face_entity_feature_map = {
         "area": 1,
@@ -115,6 +115,7 @@ class JointGraphDataset(JointBaseDataset):
 
     def __init__(
         self,
+        joint_judge_dir,
         root_dir,
         split="train",
         random_rotate=False,
@@ -136,24 +137,25 @@ class JointGraphDataset(JointBaseDataset):
         n_bits=9
     ):
         """
-        Load the Fusion 360 Gallery joints dataset from graph data
-        :param root_dir: Root path to the dataset
-        :param split: string Either train, val, test, mix_test, or all set
-        :param random_rotate: bool Randomly rotate the point features
+        Load the Fusion 360 Gallery joints dataset from graph data 从图形数据中加载 Fusion 360 图库关节数据集
+        :param root_dir: Root path to the dataset                               根路径
+        :param split: string Either train, val, test, mix_test, or all set      字符串 train、val、test、mix_test 或全部集合
+        :param random_rotate: bool Randomly rotate the point features           随机旋转
         :param delete_cache: bool Delete the cached pickle files
-        :param limit: int Limit the number of joints to load to this number
+        :param limit: int Limit the number of joints to load to this number     关节数限制
         :param threads: Number of threads to use for data loading
-        :param shuffle_split: Shuffle the files within a split when loading from json data
-        :param seed: Random seed to use
-        :param center_and_scale: bool Center and scale the point features
-        :param max_node_count: int Exclude joints with more than this number of combined graph nodes
-        :param label_scheme: Label remapping scheme.
-                Must be one of None, off, ambiguous_on, hole_on, ambiguous_hole_on
-        :param input_features: Input features to use as a string separated by commas. Can include:
+        :param shuffle_split: Shuffle the files within a split when loading from json data     从 json 数据加载时，在分片内洗牌文件
+        :param seed: Random seed to use                                         随机种子
+        :param center_and_scale: bool Center and scale the point features       bool 将点特征居中并缩放
+        :param max_node_count: int Exclude joints with more than this number of combined graph nodes 排除合并图节点数超过此数的关节点
+        :param label_scheme: Label remapping scheme.                            标签重映射方案
+                Must be one of None, off, ambiguous_on, hole_on, ambiguous_hole_on  以逗号分隔的字符串形式输入的特征
+        :param input_features: Input features to use as a string separated by commas. Can include: 
                 points, normals, trimming_mask, entity_types, is_face, area, length,
                 face_reversed, edge_reversed, reversed, convexity, dihedral_angle"
         """
         super().__init__(
+            joint_judge_dir,
             root_dir,
             split=split,
             random_rotate=random_rotate,
@@ -165,7 +167,7 @@ class JointGraphDataset(JointBaseDataset):
         )
         self.center_and_scale = center_and_scale
         self.max_node_count = max_node_count
-        self.labels_on, self.labels_off = self.parse_label_scheme_arg(label_scheme)
+        self.labels_on, self.labels_off = self.parse_label_scheme_arg(label_scheme) #"Joint" ['Non-joint', 'Ambiguous', 'JointEquivalent', 'AmbiguousEquivalent', 'Hole', 'HoleEquivalent']
         self.skip_far = skip_far
         self.skip_interference = skip_interference
         self.skip_nurbs = skip_nurbs
@@ -173,6 +175,11 @@ class JointGraphDataset(JointBaseDataset):
         self.joint_type = joint_type
         self.quantize = quantize
         self.n_bits = n_bits
+
+        # self.joint_judge = []  # 初始化 joint_judge 列表
+        # 读取 joint_judge.json 标签文件
+        with open(self.joint_judge_dir, 'r') as f:
+            self.joint_judge_dict = json.load(f)
 
         # Binary is / is not a joint entity
         self.num_classes = 2
@@ -207,15 +214,14 @@ class JointGraphDataset(JointBaseDataset):
 
             self.remove_all_unused_input_features()
             return
-
+        
         # Get the joint files for our split
-        joint_files = self.get_joint_files()
-
+        joint_files = self.get_joint_files() #获取文件列表
         start_time = time.time()
         if threads is None or threads < 2:
             # Serial Version
-            for joint_file_name in tqdm(joint_files):
-                gs = self.load_graph(joint_file_name)
+            for joint_file_name in tqdm(joint_files): #进度条库
+                gs = self.load_graph(joint_file_name) #加载文件数据
                 if gs is None:
                     continue
                 graph1, graph2, joint_graph, joint_file, graph1_json_file, graph2_json_file, has_holes, transforms = gs
@@ -362,7 +368,7 @@ class JointGraphDataset(JointBaseDataset):
             shuffle=shuffle,
             collate_fn=self.collate_fn_fixed_batch_size,
             num_workers=num_workers,
-            drop_last=True,
+            drop_last=True,             #丢弃最后一个不完整的batch
         )
 
     def get_test_dataloader(self, batch_size=1, num_workers=0):
@@ -394,7 +400,7 @@ class JointGraphDataset(JointBaseDataset):
 
     @staticmethod
     def parse_label_scheme_arg(label_scheme_string=None):
-        """Parse the input feature lists from the arg string"""
+        """Parse the input feature lists from the arg string 解析一个字符串参数,指定了哪些标签应该被启用"""
         all_labels = list(JointGraphDataset.label_map.keys())
         all_labels_set = set(all_labels)
         if label_scheme_string is None:
@@ -453,36 +459,37 @@ class JointGraphDataset(JointBaseDataset):
 
     @staticmethod
     def parse_input_features_arg(input_features_string=None, input_feature_type="both"):
-        """Parse the input feature lists from the arg string"""
-        all_face_grid = list(JointGraphDataset.face_grid_feature_map.keys())
-        all_face_entity = list(JointGraphDataset.face_entity_feature_map.keys())
-        all_edge_grid = list(JointGraphDataset.edge_grid_feature_map.keys())
-        all_edge_entity = list(JointGraphDataset.edge_entity_feature_map.keys())
+        """输入特征分别与all_grid_feat和all_entity_feat的交集,规范顺序
+        Parse the input feature lists from the arg string"""
+        all_face_grid = list(JointGraphDataset.face_grid_feature_map.keys())         #['points', 'normals', 'trimming_mask']
+        all_face_entity = list(JointGraphDataset.face_entity_feature_map.keys())     #['area', 'axis_dir', 'axis_pos', 'bounding_box', 'circumference', 'entity_types', 'param_1', 'param_2']
+        all_edge_grid = list(JointGraphDataset.edge_grid_feature_map.keys())         #['points', 'tangents']
+        all_edge_entity = list(JointGraphDataset.edge_entity_feature_map.keys())     #['axis_dir', 'axis_pos', 'bounding_box', 'entity_types', 'length', 'radius', 'start_point', 'middle_point', 'end_point']
         if input_features_string is None:
             # Default to all features
             input_features = set(all_face_grid + all_face_entity + all_edge_grid + all_edge_entity)
         else:
-            input_features = set(input_features_string.split(","))
+            input_features = set(input_features_string.split(","))                   #7{'entity_types', 'tangents', 'normals', 'points', 'trimming_mask', 'length', 'area'}
         assert len(input_features) > 0
 
         # Filter the features to be either face, edge, or both
         if input_feature_type == "both":
-            grid_feat = set(all_face_grid + all_edge_grid)
-            entity_feat = set(all_face_entity + all_edge_entity)
+            grid_feat = set(all_face_grid + all_edge_grid)                           #4{'tangents', 'trimming_mask', 'normals', 'points'}
+            entity_feat = set(all_face_entity + all_edge_entity)                     #13{'middle_point', 'param_2', 'entity_types', 'end_point', 'axis_pos', 'bounding_box', 'start_point', 'circumference', 'param_1', 'length', 'radius', 'axis_dir', 'area'}
         elif input_feature_type == "face":
             grid_feat = set(all_face_grid)
             entity_feat = set(all_face_entity)
         elif input_feature_type == "edge":
             grid_feat = set(all_edge_grid)
             entity_feat = set(all_edge_entity)
-        both_feat = grid_feat.union(entity_feat)
+        both_feat = grid_feat.union(entity_feat)                                     #17
 
-        # Make sure we create a canonical order after performing non-deterministic set intersection
-        ordered_feat = JointGraphDataset.get_default_input_features()
+        # Make sure we create a canonical order after performing non-deterministic set intersection 规范顺序
+        ordered_feat = JointGraphDataset.get_default_input_features()                #17
         return (
-            JointGraphDataset.order_input_features(input_features.intersection(both_feat), ordered_feat),
-            JointGraphDataset.order_input_features(input_features.intersection(grid_feat), ordered_feat),
-            JointGraphDataset.order_input_features(input_features.intersection(entity_feat), ordered_feat)
+            JointGraphDataset.order_input_features(input_features.intersection(both_feat), ordered_feat), #['points', 'normals', 'trimming_mask', 'area', 'entity_types', 'tangents', 'length']
+            JointGraphDataset.order_input_features(input_features.intersection(grid_feat), ordered_feat), #['points', 'normals', 'trimming_mask', 'tangents']
+            JointGraphDataset.order_input_features(input_features.intersection(entity_feat), ordered_feat)#['area', 'entity_types', 'length']
         )
 
     @staticmethod
@@ -731,8 +738,11 @@ class JointGraphDataset(JointBaseDataset):
         )
         if label_matrix.sum() == 0:
             return None
+        
+        #修改
+        joint_judge = self.load_joint_judge_lb(self.joint_judge_dict, joint_file.name)
         # Create the joint graph from the label matrix
-        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_list, joint_file_name)
+        joint_graph = self.make_joint_graph(g1, g2, label_matrix, joint_type_list, joint_file_name, joint_judge) #joint_graph
         # Scale geometry features from both graphs with a common scale
         if self.center_and_scale:
             scale_good = self.scale_features(
@@ -1085,7 +1095,7 @@ class JointGraphDataset(JointBaseDataset):
         #     )
         return label_matrix, joint_type_matrix
 
-    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_matrix, joint_file_name):
+    def make_joint_graph(self, graph1, graph2, label_matrix, joint_type_matrix, joint_file_name, joint_judge):
         """Create a joint graph connecting graph1 and graph2 densely"""
         nodes_indices_first_graph = torch.arange(graph1.num_nodes)
         # We want to treat both graphs as one, so order the indices of the second graph's nodes
@@ -1104,6 +1114,7 @@ class JointGraphDataset(JointBaseDataset):
         joint_graph.num_nodes_graph2 = graph2.num_nodes
         joint_graph.joint_type_matrix = joint_type_matrix.view(-1)
         joint_graph.joint_file_name = joint_file_name
+        joint_graph.joint_judge = joint_judge
         return joint_graph
 
     def get_joint_equivalents(self, geometry, face_count, entity_count):
@@ -1486,6 +1497,20 @@ class JointGraphDataset(JointBaseDataset):
             color=color
         )
 
+    def load_joint_judge_lb(self, joint_judge_dict, joint_file_name):
+        joint_file_name = joint_file_name[:joint_file_name.find('.')]
+        # 从 joint_judge_dict 中获取对应的标签
+        label = joint_judge_dict.get(joint_file_name, None)
+        if label is None:
+            raise ValueError(f"Label not found for joint file name: {joint_file_name}")
+
+        # 将标签转换为 0 或 1
+        if label == 0 or label == 1:
+            return label
+        else:
+            raise ValueError(f"Invalid label value: {label} for joint file name: {joint_file_name}")
+
+
 
 class JointGraphBatchDataLoader:
     """
@@ -1538,3 +1563,5 @@ class JointGraphBatchDataLoader:
             batch = [self.dataset[id] for id in batch]
             batched_graphs = self._make_batch_from_data_list(batch)
             yield batched_graphs
+    
+    

@@ -9,11 +9,12 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 
 from utils import util
-
+import re
 
 class JointBaseDataset(Dataset):
     def __init__(
         self,
+        joint_judge_dir,
         root_dir,
         split="train",
         random_rotate=False,
@@ -34,6 +35,11 @@ class JointBaseDataset(Dataset):
         :param shuffle_split: Shuffle the files within a split when loading from json data
         :param seed: Random seed to use
         """
+        if isinstance(joint_judge_dir, Path):
+            self.joint_judge_dir = joint_judge_dir
+        else:
+            self.joint_judge_dir = Path(joint_judge_dir)
+
         if isinstance(root_dir, Path):
             self.root_dir = root_dir
         else:
@@ -84,7 +90,7 @@ class JointBaseDataset(Dataset):
             return
         data["files"] = self.files
         data["original_file_count"] = self.original_file_count
-        with open(self.cache_file, "wb") as f:
+        with open(self.cache_file, "wb") as f:         #dump:将一个 Python 对象 data 序列化（pickle）并写入到一个打开的文件对象 f
             pickle.dump(data, f)
         if self.cache_file.exists():
             print(f"Data cache written to: {self.cache_file}")
@@ -121,9 +127,11 @@ class JointBaseDataset(Dataset):
 
     def get_joint_files(self):
         """Get the joint files to load"""
-        all_joint_files = self.get_all_joint_files()
+        # all_joint_files = self.get_all_joint_files()         #获取列表中所有文件名
+        all_joint_files = self.get_all_judge_joint_files()     #修改：获取列表中所有在judge序号内的文件名
         # Create the train test split
-        joint_files = self.get_split(all_joint_files)
+        joint_files = self.get_split(all_joint_files)          #切分文件名
+        # joint_files = all_joint_files                            #修改2
         # Using only a subset of files
         if self.limit > 0:
             joint_files = joint_files[:self.limit]
@@ -138,6 +146,24 @@ class JointBaseDataset(Dataset):
         """Get all the json joint files that look like joint_set_00025.json"""
         pattern = "joint_set_[0-9][0-9][0-9][0-9][0-9].json"
         return [f.name for f in Path(self.root_dir).glob(pattern)]
+    
+    def get_all_judge_joint_files(self):
+        """Get all the json joint files that look like joint_set_00025.json并且小于joint_judge序号"""
+        pattern = "joint_set_[0-9][0-9][0-9][0-9][0-9].json"
+        matching_files = [f.name for f in Path(self.root_dir).glob(pattern)]
+        # 过滤出符合条件的文件名
+        valid_files = []
+        with open(self.joint_judge_dir, 'r') as f:
+            joint_judge_dict = json.load(f)
+        for file_name in matching_files:
+            # 提取文件名中的数字部分
+            match = re.search(r"joint_set_(\d{5})\.json", file_name)
+            if match:
+                number_part = int(match.group(1))
+                # 检查数字部分是否小于 len(joint_judge)
+                if number_part < len(joint_judge_dict):
+                    valid_files.append(file_name)       
+        return valid_files
 
     def get_split(self, all_joint_files):
         """Get the train/test split"""
