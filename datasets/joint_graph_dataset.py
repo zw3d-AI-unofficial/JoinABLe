@@ -115,7 +115,6 @@ class JointGraphDataset(JointBaseDataset):
 
     def __init__(
         self,
-        joint_judge_dir,
         root_dir,
         split="train",
         random_rotate=False,
@@ -155,7 +154,6 @@ class JointGraphDataset(JointBaseDataset):
                 face_reversed, edge_reversed, reversed, convexity, dihedral_angle"
         """
         super().__init__(
-            joint_judge_dir,
             root_dir,
             split=split,
             random_rotate=random_rotate,

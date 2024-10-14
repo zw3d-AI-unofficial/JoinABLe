@@ -14,7 +14,6 @@ import re
 class JointBaseDataset(Dataset):
     def __init__(
         self,
-        joint_judge_dir,
         root_dir,
         split="train",
         random_rotate=False,
@@ -35,15 +34,11 @@ class JointBaseDataset(Dataset):
         :param shuffle_split: Shuffle the files within a split when loading from json data
         :param seed: Random seed to use
         """
-        if isinstance(joint_judge_dir, Path):
-            self.joint_judge_dir = joint_judge_dir
-        else:
-            self.joint_judge_dir = Path(joint_judge_dir)
-
         if isinstance(root_dir, Path):
             self.root_dir = root_dir
         else:
             self.root_dir = Path(root_dir)
+        self.joint_judge_dir = self.root_dir / "joint_judge.json"
         assert split in ("train", "val", "validation", "test", "mix_test", "all")
         self.split = split
         self.shuffle_split = shuffle_split

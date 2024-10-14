@@ -296,7 +296,6 @@ class JointPrediction(pl.LightningModule):
 
 def load_dataset(args, split="train", random_rotate=False, label_scheme="Joint", max_node_count=0):
     return JointGraphDataset(
-        joint_judge_dir=args.joint_judge,
         root_dir=args.dataset,
         split=split,
         center_and_scale=True,

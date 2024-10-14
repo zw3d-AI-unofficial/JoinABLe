@@ -21,14 +21,8 @@ def get_parser():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="/home/share/brep/zw3d/joint/zw3d-joinable-dataset/joint/",
+        default="/home/share/brep/zw3d/zw3d-joinable-dataset/joint/",
         help="Dataset path."
-    )
-    parser.add_argument(
-        "--joint_judge",
-        type=str,
-        default="/home/share/brep/zw3d/joint/zw3d-joinable-dataset/joint/joint_judge.json",
-        help="Joint_judge path."
     )
     parser.add_argument(
         "--delete_cache",
